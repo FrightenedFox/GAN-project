@@ -1,0 +1,13 @@
+
+*.json
+*.h5
+*.hdf5
+.DS_Store
+
+data
+images
+saved_models
+MNIST
+
+__pycache__
+.ipynb_checkpoints
