@@ -8,10 +8,10 @@ class BitOps:
         self.original = np.array(original)
         self._int_orig = np.array([self.float2int(_float)
                                    for _float in original]).astype("int64")
-        # self.mutations = np.empty(len(self.original))
         self.mutations = None
         self._mut_masks = None
         self.vec_int2float = np.vectorize(self.int2float)
+        # self.vec_bin2int = np.vectorize(self.bin2int)
 
     @staticmethod
     def bin2float(b: str) -> float:
@@ -113,13 +113,12 @@ class BitOps:
             str_mut_masks = np.char.add(str_mut_masks, next_bit)
         self._mut_masks = np.array([self.bin2int(_bin)
                                     for _bin in str_mut_masks]).astype("int64")
+        # TODO: try to solve an numpy OverflowError and vectorized version
+        # self._mut_masks = self.vec_bin2int(str_mut_masks).astype("int64")
         self._mut_masks = self._mut_masks.reshape((n_mut, len(self.original)))
         return self._mut_masks
 
     def mutate(self, n_mut):
-        # for i in range(len(self.original)):
-        #     self.mutations[i] = self.float2int(self.original[i])
-        # self.mutations = np.repeat([self.mutations], n_mut, axis=0)
         self._gen_mut_masks(n_mut)
         self.mutations = self.vec_int2float(self._int_orig ^ self._mut_masks)
         return self.mutations
