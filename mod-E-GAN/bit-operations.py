@@ -105,12 +105,15 @@ class BitOps:
         """
         return struct.unpack(">d", struct.pack('>q', in_val))[0]
 
-    def _gen_mut_masks(self, n_mut, prob=(0.95, 0.05), length=64):
+    def _gen_mut_masks(self, n_mut, prob=(0.95, 0.05), length=64, chunk_s=16):
+        b_lists = [f'{d:0{chunk_s}b}' for d in range(2 ** chunk_s)]
+        p_list = [prob[0] ** d.count("0") * prob[1] ** d.count("1")
+                  for d in b_lists]
         n_masks = n_mut * len(self.original)
-        str_mut_masks = np.random.choice(["0", "1"], size=n_masks, p=prob)
-        for i in range(length - 1):
-            next_bit = np.random.choice(["0", "1"], size=n_masks, p=prob)
-            str_mut_masks = np.char.add(str_mut_masks, next_bit)
+        str_mut_masks = np.random.choice(b_lists, size=n_masks, p=p_list)
+        for i in range(int(length / chunk_s) - 1):
+            next_chunk = np.random.choice(b_lists, size=n_masks, p=p_list)
+            str_mut_masks = np.char.add(str_mut_masks, next_chunk)
         self._mut_masks = np.array([self.bin2int(_bin)
                                     for _bin in str_mut_masks]).astype("int64")
         # TODO: try to solve an numpy OverflowError and vectorized version
@@ -127,4 +130,5 @@ class BitOps:
 if __name__ == "__main__":
     bit_ops = BitOps(np.array([0.234, -1.23, 12.625]))
     print(bit_ops.mutate(5))
-
+    # test_bits = BitOps(np.random.normal(0, 1000, 1000))
+    # test_bits.mutate(100)
