@@ -20,7 +20,7 @@ from bit_operations import BitOps
 os.makedirs("images", exist_ok=True)
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--n_epochs", type=int, default=1,
+parser.add_argument("--n_epochs", type=int, default=200,
                     help="number of epochs of training")
 parser.add_argument("--batch_size", type=int, default=64,
                     help="size of the batches")
@@ -41,11 +41,11 @@ parser.add_argument("--channels", type=int, default=1,
 parser.add_argument("--sample_interval", type=int, default=400,
                     help="interval between image samples")
 
-parser.add_argument("--n_mutations", type=int, default=10,
+parser.add_argument("--n_mutations", type=int, default=30,
                     help="number of the mutations per parameter")
 parser.add_argument("--mutation_prob", type=float, default=0.05,
                     help="probability of the mutation")
-parser.add_argument("--mutation_interval", type=int, default=600,
+parser.add_argument("--mutation_interval", type=int, default=1000,
                     help="interval between mutations")
 opt = parser.parse_args()
 print(opt)
@@ -215,7 +215,7 @@ Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
 # ----------
 #  Training
 # ----------
-
+mut_counter, good_mut = 0, 0
 for epoch in range(opt.n_epochs):
     for i, (imgs, _) in enumerate(dataloader):
 
@@ -265,14 +265,16 @@ for epoch in range(opt.n_epochs):
 
         batches_done = epoch * len(dataloader) + i
         if batches_done % opt.mutation_interval == 0:
-            print("Applying mutation... ", end="")
+            mut_counter += 1
+            print("Calculating mutations... ", end="")
             em = EvoMod(generator.state_dict(),
                         discriminator.state_dict(),
                         n_mut=opt.n_mutations)
             em.create_mutations(prob=opt.mutation_prob)
             new_params = em.compare_mutations()
             if new_params is not None:
-                print("Loading new params!")
+                good_mut += 1
+                print("Applying new params!")
                 generator.load_state_dict(new_params)
             else:
                 print("Mutation unsuccessful, keeping old params.")
@@ -284,5 +286,6 @@ for epoch in range(opt.n_epochs):
             print(
                 "[Epoch %d/%d] [Batch %d/%d] [D loss: %f] [G loss: %f]"
                 % (epoch, opt.n_epochs, i, len(dataloader), d_loss.item(),
-                   g_loss.item())
+                   g_loss.item()) +
+                "[Mutations success rate %d/%d]" % (good_mut, mut_counter)
             )
