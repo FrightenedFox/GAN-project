@@ -33,6 +33,7 @@ print(opt)
 img_shape = (opt.channels, opt.img_size, opt.img_size)
 
 cuda = True if torch.cuda.is_available() else False
+print("Is cuda enabled?", "YES" if cuda else "NO")
 
 
 class Generator(nn.Module):
@@ -94,10 +95,10 @@ if cuda:
     adversarial_loss.cuda()
 
 # Configure data loader
-os.makedirs("../../data/mnist", exist_ok=True)
+# os.makedirs("../../data/mnist", exist_ok=True)
 dataloader = torch.utils.data.DataLoader(
     datasets.MNIST(
-        "../../data/mnist",
+        "..",
         train=True,
         download=True,
         transform=transforms.Compose(

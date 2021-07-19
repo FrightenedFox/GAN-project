@@ -124,11 +124,12 @@ class BitOps:
     def mutate(self, n_mut):
         self._gen_mut_masks(n_mut)
         self.mutations = self.vec_int2float(self._int_orig ^ self._mut_masks)
+        np.nan_to_num(self.mutations, copy=False)
         return self.mutations
 
 
 if __name__ == "__main__":
     bit_ops = BitOps(np.array([0.234, -1.23, 12.625]))
-    print(bit_ops.mutate(5))
+    print(bit_ops.mutate(100))
     # test_bits = BitOps(np.random.normal(0, 1000, 1000))
     # test_bits.mutate(100)
