@@ -3,126 +3,62 @@ import struct
 
 
 class BitOps:
-
     def __init__(self, original):
         self.original = np.array(original)
-        self._int_orig = np.array([self.float2int(_float)
-                                   for _float in original]).astype("int64")
+        self._int_orig = self.float2int(self.original)
         self.mutations = None
         self._mut_masks = None
-        self.vec_int2float = np.vectorize(self.int2float)
-        # self.vec_bin2int = np.vectorize(self.bin2int)
+        self.in_shape = self.original.shape
 
     @staticmethod
-    def bin2float(b: str) -> float:
-        """ Convert binary string to a float.
-
-        Parameters
-        ----------
-            b : str
-                Binary string to transform.
-
-        Returns
-        -------
-        float
-
-        :Authors:
-            Javier Domínguez Gómez  <javier.dominguez@optivamedia.com>
-        """
-        try:    # solves "OverflowError" almost without damaging distribution
-            h = int(b, 2).to_bytes(8, byteorder="big", signed=True)
-        except OverflowError:
-            h = int(b, 2).to_bytes(8, byteorder="big")
-        return struct.unpack('>d', h)[0]
-
-    @staticmethod
-    def bin2int(b: str) -> int:
-        """ Convert binary string to an int.
-
-        Parameters
-        ----------
-            b : str
-                Binary string to transform.
-
-        Returns
-        -------
-        int
-        """
-        try:    # solves "OverflowError" almost without damaging distribution
-            h = int(b, 2).to_bytes(8, byteorder="big", signed=True)
-        except OverflowError:
-            h = int(b, 2).to_bytes(8, byteorder="big")
-        return struct.unpack('>q', h)[0]
-
-    @staticmethod
-    def float2bin(f: float) -> str:
-        """ Convert float to 64-bit binary string.
-
-        Parameters
-        ----------
-            f : float
-                Float number to transform
-
-        Returns
-        -------
-        str
-            binary string representation of f in the IEEE 754 standard
-
-        :Authors:
-            Javier Domínguez Gómez  <javier.dominguez@optivamedia.com>
-        """
-        [d] = struct.unpack(">q", struct.pack(">d", f))
-        return f'{d:064b}'
-
-    @staticmethod
-    def float2int(f: float) -> int:
+    def float2int(in_val: np.array) -> np.array:
         """ Convert float to 64-bit binary integer
 
         Parameters
         ----------
-            f : float
+            in_val : numpy.array
                 Float number to transform
 
         Returns
         -------
-        int
+        np.array
             binary integer representation of f (IEEE 754 standard)
         """
-        return struct.unpack(">q", struct.pack(">d", f))[0]
+        return np.frombuffer(in_val.astype("float64").tobytes(), dtype="int64")
 
     @staticmethod
-    def int2float(in_val: int) -> float:
+    def int2float(in_val: np.array) -> np.array:
         """ Convert binary integer to a float.
 
         Parameters
         ----------
-            in_val : int
+            in_val : numpy.array
                 Binary string to transform.
 
         Returns
         -------
-        float
+        np.array
         """
-        return struct.unpack(">d", struct.pack('>q', in_val))[0]
+        return np.frombuffer(in_val.astype("int64").tobytes(), dtype="float64")
 
     def _gen_mut_masks(self, n_mut=5, prob=0.05, length=56, chunk_s=8):
         probs = (1 - prob, prob)
-        b_lists = [f'{d:0{chunk_s}b}' for d in range(2 ** chunk_s)]
-        p_list = [probs[0] ** d.count("0") * probs[1] ** d.count("1")
-                  for d in b_lists]
+        num_list = np.arange(2 ** chunk_s, dtype="int64")
+        bin_list = [f'{d:0{chunk_s}b}' for d in range(2 ** chunk_s)]
+        prob_list = [probs[0] ** d.count("0") * probs[1] ** d.count("1")
+                     for d in bin_list]
         n_masks = n_mut * len(self.original)
-        str_mut_masks = np.array(["0"*8]).repeat(n_masks)
+        self._mut_masks = np.zeros(n_masks, dtype="int64")
         for i in range(int(length / chunk_s)):
-            next_chunk = np.random.choice(b_lists, size=n_masks, p=p_list)
-            str_mut_masks = np.char.add(str_mut_masks, next_chunk)
-        self._mut_masks = np.array([self.bin2int(_bin)
-                                    for _bin in str_mut_masks]).astype("int64")
-        # TODO: try to solve an numpy OverflowError and vectorized version
-        # self._mut_masks = self.vec_bin2int(str_mut_masks).astype("int64")
+            next_chunk = np.random.choice(
+                num_list, size=n_masks, p=prob_list
+            )
+            next_chunk *= 2 ** (i * chunk_s)
+            self._mut_masks += next_chunk
         self._mut_masks = self._mut_masks.reshape((n_mut, len(self.original)))
         return self._mut_masks
 
-    def mutate(self, **kwargs):
+    def mutate(self, n_mut, **kwargs):
         """ Creates mutations of the original array
 
         Parameters
@@ -140,14 +76,16 @@ class BitOps:
                 chunk_s : int
                     size of the chunk of bits to be chosen together
         """
-        self._gen_mut_masks(**kwargs)
-        self.mutations = self.vec_int2float(self._int_orig ^ self._mut_masks)
-        np.nan_to_num(self.mutations, copy=False, nan=1.0, posinf=100, neginf=-100)
+        out_shape = [n_mut, *self.in_shape]
+        self._gen_mut_masks(n_mut, **kwargs)
+        self.mutations = self.int2float(self._int_orig ^ self._mut_masks)
+        self.mutations = np.nan_to_num(self.mutations.reshape(out_shape),
+                                       nan=1.0, posinf=100, neginf=-100)
         return self.mutations
 
 
 if __name__ == "__main__":
     bit_ops = BitOps(np.array([0.234, -1.23, 12.625]))
     print(bit_ops.mutate(n_mut=10))
-    # test_bits = BitOps(np.random.normal(0, 1000, 1000))
-    # test_bits.mutate(100)
+    # test_bits = BitOps(np.random.normal(0, 1000, 100000))
+    # test_bits.mutate(n_mut=100)

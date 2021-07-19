@@ -20,9 +20,9 @@ from bit_operations import BitOps
 os.makedirs("images", exist_ok=True)
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--n_epochs", type=int, default=200,
+parser.add_argument("--n_epochs", type=int, default=1,
                     help="number of epochs of training")
-parser.add_argument("--batch_size", type=int, default=100,
+parser.add_argument("--batch_size", type=int, default=64,
                     help="size of the batches")
 parser.add_argument("--lr", type=float, default=0.0002,
                     help="adam: learning rate")
@@ -45,8 +45,8 @@ parser.add_argument("--n_mutations", type=int, default=10,
                     help="number of the mutations per parameter")
 parser.add_argument("--mutation_prob", type=float, default=0.05,
                     help="probability of the mutation")
-parser.add_argument("--mutation_freq", type=int, default=600,
-                    help="frequency of the mutations")
+parser.add_argument("--mutation_interval", type=int, default=600,
+                    help="interval between mutations")
 opt = parser.parse_args()
 print(opt)
 
@@ -264,6 +264,19 @@ for epoch in range(opt.n_epochs):
         optimizer_D.step()
 
         batches_done = epoch * len(dataloader) + i
+        if batches_done % opt.mutation_interval == 0:
+            print("Applying mutation... ", end="")
+            em = EvoMod(generator.state_dict(),
+                        discriminator.state_dict(),
+                        n_mut=opt.n_mutations)
+            em.create_mutations(prob=opt.mutation_prob)
+            new_params = em.compare_mutations()
+            if new_params is not None:
+                print("Loading new params!")
+                generator.load_state_dict(new_params)
+            else:
+                print("Mutation unsuccessful, keeping old params.")
+
         if batches_done % opt.sample_interval == 0:
             save_image(gen_imgs.data[:25],
                        "images/%d.png" % batches_done,
@@ -273,11 +286,3 @@ for epoch in range(opt.n_epochs):
                 % (epoch, opt.n_epochs, i, len(dataloader), d_loss.item(),
                    g_loss.item())
             )
-            em = EvoMod(generator.state_dict(),
-                        discriminator.state_dict(),
-                        n_mut=10)
-            em.create_mutations(prob=0.2)
-            new_params = em.compare_mutations()
-            if new_params is not None:
-                print("Loading new params")
-                generator.load_state_dict(new_params)
