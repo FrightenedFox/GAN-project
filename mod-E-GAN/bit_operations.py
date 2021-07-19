@@ -105,13 +105,14 @@ class BitOps:
         """
         return struct.unpack(">d", struct.pack('>q', in_val))[0]
 
-    def _gen_mut_masks(self, n_mut, prob=(0.95, 0.05), length=64, chunk_s=16):
+    def _gen_mut_masks(self, n_mut=5, prob=0.05, length=56, chunk_s=8):
+        probs = (1 - prob, prob)
         b_lists = [f'{d:0{chunk_s}b}' for d in range(2 ** chunk_s)]
-        p_list = [prob[0] ** d.count("0") * prob[1] ** d.count("1")
+        p_list = [probs[0] ** d.count("0") * probs[1] ** d.count("1")
                   for d in b_lists]
         n_masks = n_mut * len(self.original)
-        str_mut_masks = np.random.choice(b_lists, size=n_masks, p=p_list)
-        for i in range(int(length / chunk_s) - 1):
+        str_mut_masks = np.array(["0"*8]).repeat(n_masks)
+        for i in range(int(length / chunk_s)):
             next_chunk = np.random.choice(b_lists, size=n_masks, p=p_list)
             str_mut_masks = np.char.add(str_mut_masks, next_chunk)
         self._mut_masks = np.array([self.bin2int(_bin)
@@ -121,15 +122,32 @@ class BitOps:
         self._mut_masks = self._mut_masks.reshape((n_mut, len(self.original)))
         return self._mut_masks
 
-    def mutate(self, n_mut):
-        self._gen_mut_masks(n_mut)
+    def mutate(self, **kwargs):
+        """ Creates mutations of the original array
+
+        Parameters
+        ----------
+            kwargs:
+                n_mut : int
+                    number of mutations
+
+                prob : float
+                    probability of mutation
+
+                length : int
+                    length of the bitstring
+
+                chunk_s : int
+                    size of the chunk of bits to be chosen together
+        """
+        self._gen_mut_masks(**kwargs)
         self.mutations = self.vec_int2float(self._int_orig ^ self._mut_masks)
-        np.nan_to_num(self.mutations, copy=False)
+        np.nan_to_num(self.mutations, copy=False, nan=1.0, posinf=100, neginf=-100)
         return self.mutations
 
 
 if __name__ == "__main__":
     bit_ops = BitOps(np.array([0.234, -1.23, 12.625]))
-    print(bit_ops.mutate(100))
+    print(bit_ops.mutate(n_mut=10))
     # test_bits = BitOps(np.random.normal(0, 1000, 1000))
     # test_bits.mutate(100)
