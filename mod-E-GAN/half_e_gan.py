@@ -41,11 +41,11 @@ parser.add_argument("--channels", type=int, default=1,
 parser.add_argument("--sample_interval", type=int, default=400,
                     help="interval between image samples")
 
-parser.add_argument("--n_mutations", type=int, default=30,
+parser.add_argument("--n_mutations", type=int, default=250,
                     help="number of the mutations per parameter")
-parser.add_argument("--mutation_prob", type=float, default=0.05,
+parser.add_argument("--mutation_prob", type=float, default=0.02,
                     help="probability of the mutation")
-parser.add_argument("--mutation_interval", type=int, default=1000,
+parser.add_argument("--mutation_interval", type=int, default=12000,
                     help="interval between mutations")
 opt = parser.parse_args()
 print(opt)
@@ -122,7 +122,7 @@ class EvoMod:
                 )
         return self.mutated_dicts
 
-    def compare_mutations(self, n_tests=3):
+    def compare_mutations(self, n_tests=10):
         gen_eval = Generator()
         disc_eval = Discriminator()
         adversarial_loss_eval = torch.nn.BCELoss()
@@ -146,7 +146,11 @@ class EvoMod:
             curr_imgs = gen_eval(z_eval)
             curr_loss = adversarial_loss_eval(disc_eval(curr_imgs),
                                               valid_eval)
-        min_ind = np.where(self.mut_res == min(self.mut_res))[0]
+        min_ind = np.argmin(self.mut_res)
+        to_print = np.copy(self.mut_res)
+        to_print.sort()
+        print("\nCurrent loss %4f\nBest mutations:" % (curr_loss.numpy()),
+              to_print[:6])
         if self.mut_res[min_ind] < curr_loss.numpy():
             return self.params2device(
                 self.mutated_dicts[int(min_ind)],
@@ -266,11 +270,13 @@ for epoch in range(opt.n_epochs):
         batches_done = epoch * len(dataloader) + i
         if batches_done % opt.mutation_interval == 0:
             mut_counter += 1
-            print("Calculating mutations... ", end="")
+            print("Calculating mutations with p = %5f... " %
+                  (opt.mutation_prob / (epoch + 1)), end="")
             em = EvoMod(generator.state_dict(),
                         discriminator.state_dict(),
                         n_mut=opt.n_mutations)
-            em.create_mutations(prob=opt.mutation_prob)
+            # TODO: test changing probability of the mutation
+            em.create_mutations(prob=opt.mutation_prob / (epoch + 1))
             new_params = em.compare_mutations()
             if new_params is not None:
                 good_mut += 1
@@ -286,6 +292,6 @@ for epoch in range(opt.n_epochs):
             print(
                 "[Epoch %d/%d] [Batch %d/%d] [D loss: %f] [G loss: %f]"
                 % (epoch, opt.n_epochs, i, len(dataloader), d_loss.item(),
-                   g_loss.item()) +
+                   g_loss.item()),
                 "[Mutations success rate %d/%d]" % (good_mut, mut_counter)
             )
