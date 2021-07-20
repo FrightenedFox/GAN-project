@@ -41,7 +41,7 @@ parser.add_argument("--channels", type=int, default=1,
 parser.add_argument("--sample_interval", type=int, default=400,
                     help="interval between image samples")
 
-parser.add_argument("--n_mutations", type=int, default=250,
+parser.add_argument("--n_mutations", type=int, default=25,
                     help="number of the mutations per parameter")
 parser.add_argument("--mutation_prob", type=float, default=0.02,
                     help="probability of the mutation")
