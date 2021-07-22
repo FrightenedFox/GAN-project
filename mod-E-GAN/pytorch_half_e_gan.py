@@ -275,7 +275,6 @@ for epoch in range(opt.n_epochs):
             em = EvoMod(generator.state_dict(),
                         discriminator.state_dict(),
                         n_mut=opt.n_mutations)
-            # TODO: test changing probability of the mutation
             em.create_mutations(prob=opt.mutation_prob / (epoch + 1))
             new_params = em.compare_mutations()
             if new_params is not None:

@@ -9,21 +9,55 @@ from keras.optimizers import Adam
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
+import os
 
 from bit_operations import BitOps
 
 
 class ModEGAN:
-    def __init__(self, batch_size=128, n_mut=10):
-        self.batch_size = batch_size
-        self.n_mut = n_mut
-        self.img_rows = 28
-        self.img_cols = 28
-        self.channels = 1
-        self.img_shape = (self.img_rows, self.img_cols, self.channels)
-        self.latent_dim = 100
+    def __init__(self,
+                 batch_size=128,
+                 epochs=30_000,
+                 sample_interval=50,
+                 mutation_interval=3000,
+                 n_mut=10,
+                 mutation_prob=0.02):
 
-        optimizer = Adam(0.0002, 0.5)
+        self.batch_size = batch_size
+        self.epochs = epochs
+        self.sample_interval = sample_interval
+        self.n_mut = n_mut
+        self.mutation_prob = mutation_prob
+        self.mutation_interval = mutation_interval
+
+        self.img_rows, self.img_cols, self.channels = self.img_shape = (
+            28, 28, 1
+        )
+        self.latent_dim = 100
+        self.lr = 2e-4  # learning rate
+        self.beta1 = 0.5
+        self.mut_prob_reducer = 40
+        self.sample_image_rows, self.sample_image_cols = 5, 5
+
+        os.makedirs("images", exist_ok=True)
+
+        # Adding logging variables
+        self.log_ar = np.array([
+            np.empty((epochs, 2)),  # d_loss_real
+            np.empty((epochs, 2)),  # d_loss_fake
+            np.empty((epochs, 2)),  # average d_loss
+            np.empty((epochs, 2)),  # g_loss
+            np.empty((epochs, 2)),  # mut success rate
+        ])
+        self.n_of_mut_res_to_log = np.ceil(n_mut / 10 + 1).astype("int32")
+        number_of_mut = np.ceil(epochs / mutation_interval).astype("int32")
+        self.mutations_log = np.empty(
+            (number_of_mut, self.n_of_mut_res_to_log)
+        )
+        self.log_df, self.mutations_log_df = None, None
+
+        optimizer = Adam(self.lr, self.beta1)
 
         # Build and compile the discriminator
         self.discriminator = self.build_discriminator()
@@ -49,6 +83,10 @@ class ModEGAN:
         # Trains the generator to fool the discriminator
         self.combined = Model(z, validity)
         self.combined.compile(loss='binary_crossentropy', optimizer=optimizer)
+
+        # Initializing the generator to compare future mutations.
+        self.mut_compare_generator = self.build_generator(summary=False)
+        self.mut_compare_generator.trainable = False
 
     def build_generator(self, summary=True):
         model = Sequential()
@@ -87,41 +125,47 @@ class ModEGAN:
         validity = model(img)
         return Model(img, validity)
 
-    def create_mutations(self, model, **kwargs):
-
-        layers = model.layers[1].get_weights()
+    def create_mutations(self, **kwargs):
+        layers = self.generator.layers[1].get_weights()
         template = [None for _ in range(len(layers))]
-        mutated_layers = [template for _ in range(self.n_mut)]
-        for ind, layer in enumerate(layers):
+        mutated_layers = [template.copy() for _ in range(self.n_mut)]
+        for layer_ind, layer in enumerate(layers):
             mut_engine = BitOps(layer.flatten())
             mut_engine.mutate(n_mut=self.n_mut, **kwargs)
             for mut_ind in range(self.n_mut):
-                mutated_layers[mut_ind][ind] = mut_engine.\
+                mutated_layers[mut_ind][layer_ind] = mut_engine.\
                     mutations[mut_ind].reshape(layer.shape)
         return mutated_layers
 
-    def compare_mutations(self, mutations, curr_loss, n_tests=10):
+    def compare_mutations(self, mutations, mut_log_number=0, n_tests=20):
         mut_loss_res = np.empty(len(mutations))
         fake = np.zeros((n_tests, 1))
         noise = np.random.normal(0, 1, (n_tests, self.latent_dim))
         for mut_ind, mutation in enumerate(mutations):
-            gen_eval = self.build_generator(summary=False)
-            gen_eval.layers[1].set_weights(mutation)
-            gen_eval_imgs = gen_eval.predict(noise)
+            self.mut_compare_generator.layers[1].set_weights(mutation)
+            gen_eval_imgs = self.mut_compare_generator.predict(noise)
             mut_loss_res[mut_ind] = self.discriminator.\
                 test_on_batch(gen_eval_imgs, fake)[0]
 
+        curr_loss = self.discriminator.test_on_batch(
+            self.generator(noise),
+            fake
+        )[0]
         max_ind = np.argmax(mut_loss_res)
-        to_print = np.copy(mut_loss_res)
-        to_print[::-1].sort()
-        print("\nCurrent loss %4f\nBest mutations:" % curr_loss[0],
-              to_print[:6])
-        if mut_loss_res[max_ind] > curr_loss[0]:
+        to_print_and_log = np.copy(mut_loss_res)
+        to_print_and_log[::-1].sort()
+        self.mutations_log[mut_log_number][0] = curr_loss
+        self.mutations_log[mut_log_number][1:] = to_print_and_log[
+            0:self.n_of_mut_res_to_log - 1
+        ]
+        print(f"Current loss {curr_loss:.4}\n"
+              f"Best mutations (larger is better):\n\t",
+              to_print_and_log[:6])
+        if mut_loss_res[max_ind] > curr_loss:
             return mutations[int(max_ind)]
         return None
 
-    def train(self, epochs,
-              sample_interval=50, mutation_interval=100, mutation_prob=0.05):
+    def train(self):
         # Load the dataset
         (X_train, _), (_, _) = mnist.load_data()
 
@@ -133,7 +177,8 @@ class ModEGAN:
         valid = np.ones((self.batch_size, 1))
         fake = np.zeros((self.batch_size, 1))
 
-        for epoch in range(epochs):
+        mut_success_rate = np.zeros(2, dtype="int32")
+        for epoch in range(self.epochs):
             # ---------------------
             #  Train Discriminator
             # ---------------------
@@ -161,51 +206,104 @@ class ModEGAN:
             # (to have the discriminator label samples as valid)
             g_loss = self.combined.train_on_batch(noise, valid)
 
-            # If at save interval => save generated image samples
-            mut_counter, good_mut = 0, 0
-            if epoch % mutation_interval == 0:
-                mut_counter += 1
-                print("Calculating mutations with p = %5f... " %
-                      (mutation_prob / (np.sqrt(epoch) + 1)), end="")
-                mutations = self.create_mutations(
-                    self.generator,
-                    prob=mutation_prob / (np.sqrt(epoch) + 1)
-                )
-                new_params = self.compare_mutations(mutations, d_loss_fake)
+            # Collect log info
+            self.log_ar[0][epoch] = d_loss_real
+            self.log_ar[1][epoch] = d_loss_fake
+            self.log_ar[2][epoch] = d_loss
+            self.log_ar[3][epoch] = g_loss
+            self.log_ar[4][epoch] = mut_success_rate
+
+            # If at mutation interval => create and verify new mutations
+            if epoch % self.mutation_interval == 0:
+                mut_success_rate[1] += 1
+
+                # If mutation probability reducer is not None, then
+                # reduce default mutation probability
+                mut_probability = self.mutation_prob
+                if self.mut_prob_reducer is not None:
+                    mut_probability /= epoch / self.mut_prob_reducer + 1
+
+                print(f"\nCalculating mutations with p = {mut_probability:.3%}")
+                mutations = self.create_mutations(prob=mut_probability)
+                new_params = self.compare_mutations(mutations)
+
+                # Use mutated parameters of the model
+                # if they better obfuscate the discriminator
                 if new_params is not None:
-                    good_mut += 1
-                    print("Applying new params!")
+                    mut_success_rate[0] += 1
+                    print("Applying new parameters!")
                     self.generator.layers[1].set_weights(new_params)
                 else:
-                    print("Mutation unsuccessful, keeping old params.")
+                    print("Mutation unsuccessful, keeping old parameters.\n")
 
-            if epoch % sample_interval == 0:
+            # If at save interval => save generated image samples
+            if epoch % self.sample_interval == 0:
                 # Plot the progress
-                print("%d [D loss: %f, acc.: %.2f%%] [G loss: %f]" % (
-                    epoch, d_loss[0], 100 * d_loss[1], g_loss),
-                      "[Mutations success rate %d/%d]" % (
-                          good_mut, mut_counter))
+                print(
+                    f"## {epoch} ## "
+                    f"[D loss: {d_loss[0]:.4}, acc.: {d_loss[1]:.2%}] "
+                    f"[G loss: {g_loss:.4}] [Mutations success rate "
+                    f"{mut_success_rate[0]}/{mut_success_rate[1]}]"
+                )
                 self.sample_images(epoch)
 
     def sample_images(self, epoch):
-        r, c = 5, 5
-        noise = np.random.normal(0, 1, (r * c, self.latent_dim))
+        noise = np.random.normal(
+            0, 1,
+            (self.sample_image_rows * self.sample_image_cols, self.latent_dim)
+        )
         gen_imgs = self.generator.predict(noise)
 
         # Rescale images 0 - 1
         gen_imgs = 0.5 * gen_imgs + 0.5
 
-        fig, axs = plt.subplots(r, c)
+        fig, axs = plt.subplots(self.sample_image_rows, self.sample_image_cols)
         cnt = 0
-        for i in range(r):
-            for j in range(c):
-                axs[i,j].imshow(gen_imgs[cnt, :,:,0], cmap='gray')
-                axs[i,j].axis('off')
+        for i in range(self.sample_image_rows):
+            for j in range(self.sample_image_cols):
+                axs[i, j].imshow(gen_imgs[cnt, :, :, 0], cmap='gray')
+                axs[i, j].axis('off')
                 cnt += 1
-        fig.savefig("images/ker_%d.png" % epoch)
+        fig.savefig(f"images/ker_{epoch}.png")
         plt.close()
+
+    def save_log_info(self, path="log/"):
+        # Creating DataFrames from the collected log info
+        self.log_df = pd.DataFrame({
+            "d_loss_real": self.log_ar[0, :, 0],
+            "d_loss_real_acc": self.log_ar[0, :, 1],
+            "d_loss_fake": self.log_ar[1, :, 0],
+            "d_loss_fake_acc": self.log_ar[1, :, 1],
+            "average_d_loss": self.log_ar[2, :, 0],
+            "average_d_loss_acc": self.log_ar[2, :, 1],
+            "g_loss": self.log_ar[3, :, 0],
+            "g_loss_acc": self.log_ar[3, :, 1],
+            "successful_mut":self.log_ar[4, :, 0],
+            "mut_counter":self.log_ar[4, :, 1],
+        })
+        if self.mutation_interval == 1:
+            self.log_df["original_d_loss"] = self.mutations_log[:, 0]
+            self.log_df["best_mut_d_loss"] = self.mutations_log[:, 1]
+
+        self.mutations_log_df = pd.DataFrame(self.mutations_log)
+        filename_suffix = f"ep{self.epochs}_bs{self.batch_size}"\
+                          f"_nm{self.n_mut}_mp{self.mutation_prob}" \
+                          f"_mi{self.mutation_interval}"
+
+        # Writing down collected log info
+        os.makedirs("log", exist_ok=True)
+        self.log_df.to_csv(f"{path}loss_log{filename_suffix}.csv")
+        self.mutations_log_df.to_csv(f"{path}mut_log{filename_suffix}.csv")
 
 
 if __name__ == '__main__':
-    gan = ModEGAN(batch_size=32)
-    gan.train(epochs=1000, sample_interval=200, mutation_prob=0.02)
+    gan = ModEGAN(
+        epochs=30_000,
+        batch_size=32,
+        sample_interval=200,
+        n_mut=150,
+        mutation_prob=0.02,
+        mutation_interval=1000,
+    )
+    gan.train()
+    gan.save_log_info()
