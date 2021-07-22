@@ -7,15 +7,20 @@ from keras.layers.advanced_activations import LeakyReLU
 from keras.models import Sequential, Model
 from keras.optimizers import Adam
 
+import tensorflow as tf
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import os
+from datetime import datetime
 
 from bit_operations import BitOps
 
 
 class ModEGAN:
+
+    UNIQUE_MODEL_NAME = f"Mod-E-GAN-{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
     def __init__(self,
                  batch_size=128,
                  epochs=30_000,
@@ -23,10 +28,13 @@ class ModEGAN:
                  mutation_interval=3000,
                  n_mut=10,
                  mutation_prob=0.02):
-
+        # General attributes
         self.batch_size = batch_size
         self.epochs = epochs
         self.sample_interval = sample_interval
+
+        # Mutations attributes
+        self.enable_mutations = True
         self.n_mut = n_mut
         self.mutation_prob = mutation_prob
         self.mutation_interval = mutation_interval
@@ -87,6 +95,11 @@ class ModEGAN:
         # Initializing the generator to compare future mutations.
         self.mut_compare_generator = self.build_generator(summary=False)
         self.mut_compare_generator.trainable = False
+
+        self.train_step = 0
+        self.train_writer = tf.summary.create_file_writer(
+            f"logs/TensorBoard/{UNIQUE_MODEL_NAME}"
+        )
 
     def build_generator(self, summary=True):
         model = Sequential()
@@ -162,16 +175,17 @@ class ModEGAN:
               f"Best mutations (larger is better):\n\t",
               to_print_and_log[:6])
         if mut_loss_res[max_ind] > curr_loss:
+            self.log_discriminator_tf_summary(mut_loss_res[max_ind])
             return mutations[int(max_ind)]
         return None
 
     def train(self):
         # Load the dataset
-        (X_train, _), (_, _) = mnist.load_data()
+        (x_train, _), (_, _) = mnist.load_data()
 
         # Rescale -1 to 1
-        X_train = X_train / 127.5 - 1.
-        X_train = np.expand_dims(X_train, axis=3)
+        x_train = x_train / 127.5 - 1.
+        x_train = np.expand_dims(x_train, axis=3)
 
         # Adversarial ground truths
         valid = np.ones((self.batch_size, 1))
@@ -182,10 +196,9 @@ class ModEGAN:
             # ---------------------
             #  Train Discriminator
             # ---------------------
-
             # Select a random batch of images
-            idx = np.random.randint(0, X_train.shape[0], self.batch_size)
-            imgs = X_train[idx]
+            idx = np.random.randint(0, x_train.shape[0], self.batch_size)
+            imgs = x_train[idx]
 
             noise = np.random.normal(0, 1, (self.batch_size, self.latent_dim))
 
@@ -212,9 +225,10 @@ class ModEGAN:
             self.log_ar[2][epoch] = d_loss
             self.log_ar[3][epoch] = g_loss
             self.log_ar[4][epoch] = mut_success_rate
+            self.log_discriminator_tf_summary(*d_loss)
 
             # If at mutation interval => create and verify new mutations
-            if epoch % self.mutation_interval == 0:
+            if epoch % self.mutation_interval == 0 and self.enable_mutations:
                 mut_success_rate[1] += 1
 
                 # If mutation probability reducer is not None, then
@@ -264,10 +278,17 @@ class ModEGAN:
                 axs[i, j].imshow(gen_imgs[cnt, :, :, 0], cmap='gray')
                 axs[i, j].axis('off')
                 cnt += 1
-        fig.savefig(f"images/ker_{epoch}.png")
+        fig.savefig(f"images/ker_{epoch}_m{self.enable_mutations}.png")
         plt.close()
 
-    def save_log_info(self, path="log/"):
+    def log_discriminator_tf_summary(self, loss, accuracy=None):
+        with self.train_writer.as_default():
+            tf.summary.scalar("Loss", loss, step=self.train_step)
+            if accuracy is not None:
+                tf.summary.scalar("Accuracy", accuracy, step=self.train_step)
+            self.train_step += 1
+
+    def save_log_info(self, path="logs/"):
         # Creating DataFrames from the collected log info
         self.log_df = pd.DataFrame({
             "d_loss_real": self.log_ar[0, :, 0],
@@ -278,22 +299,24 @@ class ModEGAN:
             "average_d_loss_acc": self.log_ar[2, :, 1],
             "g_loss": self.log_ar[3, :, 0],
             "g_loss_acc": self.log_ar[3, :, 1],
-            "successful_mut":self.log_ar[4, :, 0],
-            "mut_counter":self.log_ar[4, :, 1],
+            "successful_mut": self.log_ar[4, :, 0],
+            "mut_counter": self.log_ar[4, :, 1],
         })
-        if self.mutation_interval == 1:
+        if self.mutation_interval == 1 and self.enable_mutations:
             self.log_df["original_d_loss"] = self.mutations_log[:, 0]
             self.log_df["best_mut_d_loss"] = self.mutations_log[:, 1]
 
         self.mutations_log_df = pd.DataFrame(self.mutations_log)
-        filename_suffix = f"ep{self.epochs}_bs{self.batch_size}"\
-                          f"_nm{self.n_mut}_mp{self.mutation_prob}" \
-                          f"_mi{self.mutation_interval}"
+        filename_suffix = (f"_ep{self.epochs}_bs{self.batch_size}"
+                           f"_nm{self.n_mut}_mp{self.mutation_prob}"
+                           f"_mi{self.mutation_interval}"
+                           f"_m{self.enable_mutations}")
 
         # Writing down collected log info
-        os.makedirs("log", exist_ok=True)
+        os.makedirs(path, exist_ok=True)
         self.log_df.to_csv(f"{path}loss_log{filename_suffix}.csv")
-        self.mutations_log_df.to_csv(f"{path}mut_log{filename_suffix}.csv")
+        if self.enable_mutations:
+            self.mutations_log_df.to_csv(f"{path}mut_log{filename_suffix}.csv")
 
 
 if __name__ == '__main__':
@@ -305,5 +328,6 @@ if __name__ == '__main__':
         mutation_prob=0.02,
         mutation_interval=1000,
     )
+    gan.enable_mutations = True
     gan.train()
     gan.save_log_info()
