@@ -19,8 +19,6 @@ from bit_operations import BitOps
 
 class ModEGAN:
 
-    UNIQUE_MODEL_NAME = f"Mod-E-GAN-{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-
     def __init__(self,
                  batch_size=128,
                  epochs=30_000,
@@ -50,6 +48,15 @@ class ModEGAN:
 
         os.makedirs("images", exist_ok=True)
 
+        self.model_name_suffix = (f"_ep{self.epochs}_bs{self.batch_size}"
+                                  f"_nm{self.n_mut}_mp{self.mutation_prob}"
+                                  f"_mi{self.mutation_interval}"
+                                  f"_m{self.enable_mutations}")
+        self.UNIQUE_MODEL_NAME = (
+            f"Mod-E-GAN-Keras-{self.model_name_suffix}"
+            f"_t{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        )
+
         # Adding logging variables
         self.log_ar = np.array([
             np.empty((epochs, 2)),  # d_loss_real
@@ -64,6 +71,7 @@ class ModEGAN:
             (number_of_mut, self.n_of_mut_res_to_log)
         )
         self.log_df, self.mutations_log_df = None, None
+        self.train_step, self.train_writer = None, None
 
         optimizer = Adam(self.lr, self.beta1)
 
@@ -72,7 +80,6 @@ class ModEGAN:
         self.discriminator.compile(loss='binary_crossentropy',
                                    optimizer=optimizer,
                                    metrics=['accuracy'])
-
         # Build the generator
         self.generator = self.build_generator()
 
@@ -96,10 +103,26 @@ class ModEGAN:
         self.mut_compare_generator = self.build_generator(summary=False)
         self.mut_compare_generator.trainable = False
 
-        self.train_step = 0
-        self.train_writer = tf.summary.create_file_writer(
-            f"logs/TensorBoard/{UNIQUE_MODEL_NAME}"
+    def get_model_name(self):
+        self.update_model_name()
+        return self.UNIQUE_MODEL_NAME
+
+    def update_model_name(self):
+        self.update_model_suffix()
+        self.UNIQUE_MODEL_NAME = (
+            f"Mod-E-GAN-Keras-{self.model_name_suffix}"
+            f"_t{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         )
+
+    def get_model_suffix(self):
+        self.update_model_suffix()
+        return self.model_name_suffix
+
+    def update_model_suffix(self):
+        self.model_name_suffix = (f"_ep{self.epochs}_bs{self.batch_size}"
+                                  f"_nm{self.n_mut}_mp{self.mutation_prob}"
+                                  f"_mi{self.mutation_interval}"
+                                  f"_m{self.enable_mutations}")
 
     def build_generator(self, summary=True):
         model = Sequential()
@@ -175,11 +198,17 @@ class ModEGAN:
               f"Best mutations (larger is better):\n\t",
               to_print_and_log[:6])
         if mut_loss_res[max_ind] > curr_loss:
-            self.log_discriminator_tf_summary(mut_loss_res[max_ind])
+            # TODO: add stats after each mutation
+            # self.log_discriminator_tf_summary(mut_loss_res[max_ind])
             return mutations[int(max_ind)]
         return None
 
     def train(self):
+        self.train_step = 0
+        self.update_model_name()
+        self.train_writer = tf.summary.create_file_writer(
+            f"logs/TensorBoard/{self.UNIQUE_MODEL_NAME}"
+        )
         # Load the dataset
         (x_train, _), (_, _) = mnist.load_data()
 
@@ -225,7 +254,7 @@ class ModEGAN:
             self.log_ar[2][epoch] = d_loss
             self.log_ar[3][epoch] = g_loss
             self.log_ar[4][epoch] = mut_success_rate
-            self.log_discriminator_tf_summary(*d_loss)
+            self.log_discriminator_tf_summary(g_loss, *d_loss)
 
             # If at mutation interval => create and verify new mutations
             if epoch % self.mutation_interval == 0 and self.enable_mutations:
@@ -281,15 +310,20 @@ class ModEGAN:
         fig.savefig(f"images/ker_{epoch}_m{self.enable_mutations}.png")
         plt.close()
 
-    def log_discriminator_tf_summary(self, loss, accuracy=None):
+    def log_discriminator_tf_summary(self, g_loss, d_loss, d_accuracy=None):
         with self.train_writer.as_default():
-            tf.summary.scalar("Loss", loss, step=self.train_step)
-            if accuracy is not None:
-                tf.summary.scalar("Accuracy", accuracy, step=self.train_step)
+            tf.summary.scalar("Generator loss",
+                              g_loss, step=self.train_step)
+            tf.summary.scalar("Discriminator loss",
+                              d_loss, step=self.train_step)
+            if d_accuracy is not None:
+                tf.summary.scalar("Discriminator accuracy",
+                                  d_accuracy, step=self.train_step)
             self.train_step += 1
 
     def save_log_info(self, path="logs/"):
         # Creating DataFrames from the collected log info
+        self.update_model_suffix()
         self.log_df = pd.DataFrame({
             "d_loss_real": self.log_ar[0, :, 0],
             "d_loss_real_acc": self.log_ar[0, :, 1],
@@ -307,16 +341,13 @@ class ModEGAN:
             self.log_df["best_mut_d_loss"] = self.mutations_log[:, 1]
 
         self.mutations_log_df = pd.DataFrame(self.mutations_log)
-        filename_suffix = (f"_ep{self.epochs}_bs{self.batch_size}"
-                           f"_nm{self.n_mut}_mp{self.mutation_prob}"
-                           f"_mi{self.mutation_interval}"
-                           f"_m{self.enable_mutations}")
 
         # Writing down collected log info
         os.makedirs(path, exist_ok=True)
-        self.log_df.to_csv(f"{path}loss_log{filename_suffix}.csv")
+        self.log_df.to_csv(f"{path}loss_log{self.model_name_suffix}.csv")
         if self.enable_mutations:
-            self.mutations_log_df.to_csv(f"{path}mut_log{filename_suffix}.csv")
+            self.mutations_log_df.to_csv(f"{path}mut_log"
+                                         f"{self.model_name_suffix}.csv")
 
 
 if __name__ == '__main__':
@@ -328,6 +359,6 @@ if __name__ == '__main__':
         mutation_prob=0.02,
         mutation_interval=1000,
     )
-    gan.enable_mutations = True
+    gan.enable_mutations = False
     gan.train()
     gan.save_log_info()
