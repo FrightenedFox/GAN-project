@@ -65,7 +65,7 @@ class BitOps:
         rng.shuffle(skeleton_1)
         rng.shuffle(skeleton_2)
         skeleton += rng.uniform(
-            size=in_arr.shape
+            size=in_arr.shape[0] * n_selections
         ) * (skeleton_1 - skeleton_2)
         out_arr = skeleton.reshape(in_arr.shape[0] * n_selections,
                                    *in_arr.shape[1:])
@@ -102,13 +102,13 @@ class BitOps:
             self.mutations = np.concatenate((self.mutations, selection_res))
             out_shape[0] = n_mut * (n_selections + 1)
             self.mutations = self.mutations.reshape(out_shape)
-            return
+            return self.mutations
         self.mutations = self.mutations.reshape(out_shape)
         return self.mutations
 
 
 if __name__ == "__main__":
     bit_ops = BitOps(np.array([0.234, -1.23, 12.625]))
-    print(bit_ops.mutate(n_mut=10))
+    print(bit_ops.mutate(n_mut=10, apply_selection=True, n_selections=2))
     # test_bits = BitOps(np.random.normal(0, 1000, 100000))
-    # test_bits.mutate(n_mut=100)
+    # test_bits.mutate(n_mut=100, apply_selection=True, n_selections=10)

@@ -40,6 +40,9 @@ class ModEGAN:
         self.mut_prob_reducer = 40
         self.enable_selection = False
         self.n_selections = 1
+        # Define whether to update parameters on the self.combined or
+        # the self.generator:
+        self.combined_mutation_mode = 1
 
         # Input attributes
         self.img_rows, self.img_cols, self.channels = self.img_shape = (
@@ -57,12 +60,10 @@ class ModEGAN:
         self.collect_logs = True
         self.log_interval = 10
 
-        os.makedirs("images", exist_ok=True)
-
-        self.model_name_suffix = (f"_ep{self.epochs}_bs{self.batch_size}"
+        self.model_name_suffix = (f"_m{self.enable_mutations}"
+                                  f"_ep{self.epochs}_bs{self.batch_size}"
                                   f"_nm{self.n_mut}_mp{self.mutation_prob}"
-                                  f"_mi{self.mutation_interval}"
-                                  f"_m{self.enable_mutations}")
+                                  f"_mi{self.mutation_interval}")
         self.UNIQUE_MODEL_NAME = (
             f"Mod-E-GAN-Keras-{self.model_name_suffix}"
             f"_t{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -111,8 +112,15 @@ class ModEGAN:
         self.combined.compile(loss='binary_crossentropy', optimizer=optimizer)
 
         # Initializing the generator to compare future mutations.
-        self.mut_compare_generator = self.build_generator(summary=False)
-        self.mut_compare_generator.trainable = False
+        if self.combined_mutation_mode:
+            self.mut_compare_generator = Model(z, validity)
+            self.mut_compare_generator.compile(
+                loss='binary_crossentropy',
+                optimizer=optimizer
+            )
+        else:
+            self.mut_compare_generator = self.build_generator(summary=False)
+            self.mut_compare_generator.trainable = False
 
     def get_model_name(self):
         self.update_model_name()
@@ -178,14 +186,13 @@ class ModEGAN:
         validity = model(img)
         return Model(img, validity)
 
-    def create_mutations(self, **kwargs):
-        layer = self.generator.layers[1].get_weights()
-        template = [None for _ in range(len(layer))]
+    def create_mutations(self, weights, **kwargs):
+        template = [None for _ in range(len(weights))]
         n_mut_and_sel = self.n_mut
         if self.enable_selection:
-            n_mut_and_sel *= self.n_selections
+            n_mut_and_sel *= (self.n_selections + 1)
         mutated_params = [template.copy() for _ in range(n_mut_and_sel)]
-        for param_ind, param in enumerate(layer):
+        for param_ind, param in enumerate(weights):
             mut_engine = BitOps(param.flatten())
             mut_engine.mutate(n_mut=self.n_mut,
                               apply_selection=self.enable_selection,
@@ -196,39 +203,62 @@ class ModEGAN:
                     mutations[mut_ind].reshape(param.shape)
         return mutated_params
 
-    def compare_mutations(self, mutations, mut_log_number=0, n_tests=20):
+    def compare_mutations(self, mutations, mut_log_number=0, n_tests=32):
         mut_loss_res = np.empty(len(mutations))
-        fake = np.zeros((n_tests, 1))
         noise = np.random.normal(0, 1, (n_tests, self.latent_dim))
-        for mut_ind, mutation in enumerate(mutations):
-            self.mut_compare_generator.layers[1].set_weights(mutation)
-            gen_eval_imgs = self.mut_compare_generator.predict(noise)
-            mut_loss_res[mut_ind] = self.discriminator.\
-                test_on_batch(gen_eval_imgs, fake)[0]
+        if self.combined_mutation_mode:
+            valid = np.ones((n_tests, 1))
+            for mut_ind, mutation in enumerate(mutations):
+                self.mut_compare_generator.layers[1].set_weights(mutation)
+                mut_loss_res[mut_ind] = self.mut_compare_generator.\
+                    test_on_batch(noise, valid)
 
-        curr_loss = self.discriminator.test_on_batch(
-            self.generator(noise),
-            fake
-        )[0]
-        max_ind = np.argmax(mut_loss_res)
-        to_print_and_log = np.copy(mut_loss_res)
-        to_print_and_log[::-1].sort()
+            curr_loss = self.combined.test_on_batch(noise, valid)
+
+            extreme_direction = "smaller"
+            extreme_ind = np.argmin(mut_loss_res)
+            to_print_and_log = np.copy(mut_loss_res)
+            to_print_and_log.sort()
+
+        else:
+            fake = np.zeros((n_tests, 1))
+            for mut_ind, mutation in enumerate(mutations):
+                self.mut_compare_generator.layers[1].set_weights(mutation)
+                gen_eval_imgs = self.mut_compare_generator.predict(noise)
+                mut_loss_res[mut_ind] = self.discriminator. \
+                    test_on_batch(gen_eval_imgs, fake)[0]
+
+            curr_loss = self.discriminator.test_on_batch(
+                        self.generator(noise),
+                        fake
+            )[0]
+
+            extreme_direction = "larger"
+            extreme_ind = np.argmax(mut_loss_res)
+            to_print_and_log = np.copy(mut_loss_res)
+            to_print_and_log[::-1].sort()
+
         self.mutations_log[mut_log_number][0] = curr_loss
         self.mutations_log[mut_log_number][1:] = to_print_and_log[
             0:self.n_of_mut_res_to_log - 1
         ]
         print(f"Current loss {curr_loss:.4}\n"
-              f"Best mutations (larger is better):\n\t",
+              f"Best mutations ({extreme_direction} is better):\n\t",
               to_print_and_log[:6])
-        if mut_loss_res[max_ind] > curr_loss:
-            return mutations[int(max_ind)], mut_loss_res[max_ind]
+        if ((mut_loss_res[extreme_ind] > curr_loss) ^
+                self.combined_mutation_mode):
+            return mutations[int(extreme_ind)], mut_loss_res[extreme_ind]
         return None, None
 
     def train(self):
+        self.update_model_name()
+        imgs_folder_name = f"{self.UNIQUE_MODEL_NAME}"
+        os.makedirs(f"images/{imgs_folder_name}", exist_ok=True)
+
         # If collect logs => generate folders and writer for the logs
         if self.collect_logs:
             self.train_step = 0
-            self.update_model_name()
+
             self.train_writer = tf.summary.create_file_writer(
                 f"logs/TensorBoard/{self.UNIQUE_MODEL_NAME}"
             )
@@ -291,16 +321,24 @@ class ModEGAN:
                 if self.mut_prob_reducer is not None:
                     mut_probability /= epoch / self.mut_prob_reducer + 1
 
-                print(f"\nCalculating mutations with p = {mut_probability:.3%}")
-                mutations = self.create_mutations(prob=mut_probability)
+                if self.combined_mutation_mode:
+                    weights = self.combined.layers[1].get_weights()
+                else:
+                    weights = self.generator.layers[1].get_weights()
+
+                print(f"\nCalculating mutations with p = {mut_probability:.4%}")
+                mutations = self.create_mutations(weights, prob=mut_probability)
                 new_params, new_d_loss_fake = self.compare_mutations(mutations)
 
                 # Use mutated parameters of the model
                 # if they better obfuscate the discriminator
                 if new_params is not None:
                     mut_success_rate[0] += 1
-                    print("Applying new parameters!")
-                    self.generator.layers[1].set_weights(new_params)
+                    print("Applying new parameters!\n")
+                    if self.combined_mutation_mode:
+                        self.combined.layers[1].set_weights(new_params)
+                    else:
+                        self.generator.layers[1].set_weights(new_params)
 
                     # Rewriting logs with new values after mutation
                     new_d_loss = 0.5 * np.add(d_loss_real[0], new_d_loss_fake)
@@ -327,13 +365,15 @@ class ModEGAN:
                 if self.collect_logs and not logs_were_collected_during_mut:
                     self.log_tf_summary(g_loss, *d_loss,
                                         include_layers=True,
+                                        include_image_sample=True,
                                         add_step=False)
                     self.train_writer.flush()
 
                 # Generate the image
-                self.sample_images(epoch)
+                image_sample = self.generate_image_sample()
+                self.save_images(image_sample, imgs_folder_name, epoch)
 
-    def sample_images(self, epoch):
+    def generate_image_sample(self):
         noise = np.random.normal(
             0, 1,
             (self.sample_image_rows * self.sample_image_cols, self.latent_dim)
@@ -341,20 +381,22 @@ class ModEGAN:
         gen_imgs = self.generator.predict(noise)
 
         # Rescale images 0 - 1
-        gen_imgs = 0.5 * gen_imgs + 0.5
+        return 0.5 * gen_imgs + 0.5
 
+    def save_images(self, image_sample, folder, epoch=-1):
         fig, axs = plt.subplots(self.sample_image_rows, self.sample_image_cols)
         cnt = 0
         for i in range(self.sample_image_rows):
             for j in range(self.sample_image_cols):
-                axs[i, j].imshow(gen_imgs[cnt, :, :, 0], cmap='gray')
+                axs[i, j].imshow(image_sample[cnt, :, :, 0], cmap='gray')
                 axs[i, j].axis('off')
                 cnt += 1
-        fig.savefig(f"images/ker_{epoch}_m{self.enable_mutations}.png")
+        fig.savefig(f"images/{folder}/{epoch}.png")
         plt.close()
 
     def log_tf_summary(self, g_loss, d_loss, d_accuracy=None,
-                       include_layers=False, add_step=True):
+                       include_layers=False, include_image_sample=False,
+                       add_step=True):
         if add_step:
             self.train_step += 1
         with self.train_writer.as_default():
@@ -365,6 +407,10 @@ class ModEGAN:
             if d_accuracy is not None:
                 tf.summary.scalar("Discriminator accuracy",
                                   d_accuracy, step=self.train_step)
+
+            if include_image_sample:
+                image_sample = self.generate_image_sample()
+                tf.summary.image("Image Sample", image_sample, step=0)
 
             if include_layers:
                 dict_of_layers = {
@@ -387,16 +433,16 @@ class ModEGAN:
         # Creating DataFrames from the collected log info
         self.update_model_suffix()
         self.log_df = pd.DataFrame({
-            "d_loss_real": self.log_ar[0, :, 0],
-            "d_loss_real_acc": self.log_ar[0, :, 1],
-            "d_loss_fake": self.log_ar[1, :, 0],
-            "d_loss_fake_acc": self.log_ar[1, :, 1],
-            "average_d_loss": self.log_ar[2, :, 0],
-            "average_d_loss_acc": self.log_ar[2, :, 1],
-            "g_loss": self.log_ar[3, :, 0],
-            "g_loss_acc": self.log_ar[3, :, 1],
-            "successful_mut": self.log_ar[4, :, 0],
-            "mut_counter": self.log_ar[4, :, 1],
+            "d_loss_real":          self.log_ar[0, :, 0],
+            "d_loss_real_acc":      self.log_ar[0, :, 1],
+            "d_loss_fake":          self.log_ar[1, :, 0],
+            "d_loss_fake_acc":      self.log_ar[1, :, 1],
+            "average_d_loss":       self.log_ar[2, :, 0],
+            "average_d_loss_acc":   self.log_ar[2, :, 1],
+            "g_loss":               self.log_ar[3, :, 0],
+            "g_loss_acc":           self.log_ar[3, :, 1],
+            "successful_mut":       self.log_ar[4, :, 0],
+            "mut_counter":          self.log_ar[4, :, 1],
         })
         if self.mutation_interval == 1 and self.enable_mutations:
             self.log_df["original_d_loss"] = self.mutations_log[:, 0]
@@ -414,14 +460,14 @@ class ModEGAN:
 
 if __name__ == '__main__':
     gan = ModEGAN(
-        epochs=30_000,
+        epochs=35_000,
         batch_size=32,
         sample_interval=200,
-        enable_mutations=True,
+        enable_mutations=False,
         n_mut=50,
         mutation_prob=0.02,
-        mutation_interval=2000,
+        mutation_interval=1000,
     )
-    gan.collect_logs = True
+    # gan.collect_logs = False
+    # gan.enable_selection = True
     gan.train()
-    # gan.save_log_info()
