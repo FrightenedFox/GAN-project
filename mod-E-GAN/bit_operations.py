@@ -57,29 +57,53 @@ class BitOps:
         self._mut_masks = self._mut_masks.reshape((n_mut, len(self.original)))
         return self._mut_masks
 
-    def mutate(self, n_mut, **kwargs):
+    @staticmethod
+    def pseudo_selection(in_arr, n_selections=1):
+        rng = np.random.default_rng()
+        skeleton = np.tile(in_arr, n_selections).astype("float64")
+        skeleton_1, skeleton_2 = skeleton.copy(), skeleton.copy()
+        rng.shuffle(skeleton_1)
+        rng.shuffle(skeleton_2)
+        skeleton += rng.uniform(
+            size=in_arr.shape
+        ) * (skeleton_1 - skeleton_2)
+        out_arr = skeleton.reshape(in_arr.shape[0] * n_selections,
+                                   *in_arr.shape[1:])
+        return out_arr
+
+    def mutate(self, n_mut, apply_selection=False, n_selections=1, **kwargs):
         """ Creates mutations of the original array
 
         Parameters
         ----------
-            kwargs:
-                n_mut : int
-                    number of mutations
+        n_mut : int
+            number of mutations
+        apply_selection : bool
+            whether to apply selection over the mutated values
+        n_selections : int
+            number of selections to apply over each mutation
+        kwargs:
+            prob : float
+                probability of mutation
 
-                prob : float
-                    probability of mutation
+            length : int
+                length of the bitstring
 
-                length : int
-                    length of the bitstring
-
-                chunk_s : int
-                    size of the chunk of bits to be chosen together
+            chunk_s : int
+                size of the chunk of bits to be chosen together
         """
         out_shape = [n_mut, *self.in_shape]
         self._gen_mut_masks(n_mut, **kwargs)
         self.mutations = self.int2float(self._int_orig ^ self._mut_masks)
-        self.mutations = np.nan_to_num(self.mutations.reshape(out_shape),
-                                       nan=1.0, posinf=100, neginf=-100)
+        self.mutations = np.nan_to_num(self.mutations, nan=1.0,
+                                       posinf=100, neginf=-100)
+        if apply_selection:
+            selection_res = self.pseudo_selection(self.mutations, n_selections)
+            self.mutations = np.concatenate((self.mutations, selection_res))
+            out_shape[0] = n_mut * (n_selections + 1)
+            self.mutations = self.mutations.reshape(out_shape)
+            return
+        self.mutations = self.mutations.reshape(out_shape)
         return self.mutations
 
 

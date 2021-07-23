@@ -23,28 +23,39 @@ class ModEGAN:
                  batch_size=128,
                  epochs=30_000,
                  sample_interval=50,
+                 enable_mutations=True,
                  mutation_interval=3000,
                  n_mut=10,
                  mutation_prob=0.02):
+
         # General attributes
         self.batch_size = batch_size
         self.epochs = epochs
-        self.sample_interval = sample_interval
 
-        # Mutations attributes
-        self.enable_mutations = True
+        # Mutations and selection attributes
+        self.enable_mutations = enable_mutations
+        self.mutation_interval = mutation_interval
         self.n_mut = n_mut
         self.mutation_prob = mutation_prob
-        self.mutation_interval = mutation_interval
+        self.mut_prob_reducer = 40
+        self.enable_selection = False
+        self.n_selections = 1
 
+        # Input attributes
         self.img_rows, self.img_cols, self.channels = self.img_shape = (
             28, 28, 1
         )
         self.latent_dim = 100
+
+        # Training tuning attributes
         self.lr = 2e-4  # learning rate
         self.beta1 = 0.5
-        self.mut_prob_reducer = 40
+
+        # Samples and logs
+        self.sample_interval = sample_interval
         self.sample_image_rows, self.sample_image_cols = 5, 5
+        self.collect_logs = True
+        self.log_interval = 10
 
         os.makedirs("images", exist_ok=True)
 
@@ -108,10 +119,13 @@ class ModEGAN:
         return self.UNIQUE_MODEL_NAME
 
     def update_model_name(self):
+        """ Updates model name if it has been changed after model
+        initialization
+        """
         self.update_model_suffix()
         self.UNIQUE_MODEL_NAME = (
-            f"Mod-E-GAN-Keras-{self.model_name_suffix}"
-            f"_t{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            f"Mod_E_GAN_t{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            f"{self.model_name_suffix}"
         )
 
     def get_model_suffix(self):
@@ -119,10 +133,13 @@ class ModEGAN:
         return self.model_name_suffix
 
     def update_model_suffix(self):
-        self.model_name_suffix = (f"_ep{self.epochs}_bs{self.batch_size}"
+        """ Updates model suffix if it has been changed after model
+        initialization
+        """
+        self.model_name_suffix = (f"_m{self.enable_mutations}"
+                                  f"_ep{self.epochs}_bs{self.batch_size}"
                                   f"_nm{self.n_mut}_mp{self.mutation_prob}"
-                                  f"_mi{self.mutation_interval}"
-                                  f"_m{self.enable_mutations}")
+                                  f"_mi{self.mutation_interval}")
 
     def build_generator(self, summary=True):
         model = Sequential()
@@ -162,16 +179,22 @@ class ModEGAN:
         return Model(img, validity)
 
     def create_mutations(self, **kwargs):
-        layers = self.generator.layers[1].get_weights()
-        template = [None for _ in range(len(layers))]
-        mutated_layers = [template.copy() for _ in range(self.n_mut)]
-        for layer_ind, layer in enumerate(layers):
-            mut_engine = BitOps(layer.flatten())
-            mut_engine.mutate(n_mut=self.n_mut, **kwargs)
-            for mut_ind in range(self.n_mut):
-                mutated_layers[mut_ind][layer_ind] = mut_engine.\
-                    mutations[mut_ind].reshape(layer.shape)
-        return mutated_layers
+        layer = self.generator.layers[1].get_weights()
+        template = [None for _ in range(len(layer))]
+        n_mut_and_sel = self.n_mut
+        if self.enable_selection:
+            n_mut_and_sel *= self.n_selections
+        mutated_params = [template.copy() for _ in range(n_mut_and_sel)]
+        for param_ind, param in enumerate(layer):
+            mut_engine = BitOps(param.flatten())
+            mut_engine.mutate(n_mut=self.n_mut,
+                              apply_selection=self.enable_selection,
+                              n_selections=self.n_selections,
+                              **kwargs)
+            for mut_ind in range(n_mut_and_sel):
+                mutated_params[mut_ind][param_ind] = mut_engine.\
+                    mutations[mut_ind].reshape(param.shape)
+        return mutated_params
 
     def compare_mutations(self, mutations, mut_log_number=0, n_tests=20):
         mut_loss_res = np.empty(len(mutations))
@@ -198,17 +221,17 @@ class ModEGAN:
               f"Best mutations (larger is better):\n\t",
               to_print_and_log[:6])
         if mut_loss_res[max_ind] > curr_loss:
-            # TODO: add stats after each mutation
-            # self.log_discriminator_tf_summary(mut_loss_res[max_ind])
-            return mutations[int(max_ind)]
-        return None
+            return mutations[int(max_ind)], mut_loss_res[max_ind]
+        return None, None
 
     def train(self):
-        self.train_step = 0
-        self.update_model_name()
-        self.train_writer = tf.summary.create_file_writer(
-            f"logs/TensorBoard/{self.UNIQUE_MODEL_NAME}"
-        )
+        # If collect logs => generate folders and writer for the logs
+        if self.collect_logs:
+            self.train_step = 0
+            self.update_model_name()
+            self.train_writer = tf.summary.create_file_writer(
+                f"logs/TensorBoard/{self.UNIQUE_MODEL_NAME}"
+            )
         # Load the dataset
         (x_train, _), (_, _) = mnist.load_data()
 
@@ -249,14 +272,16 @@ class ModEGAN:
             g_loss = self.combined.train_on_batch(noise, valid)
 
             # Collect log info
-            self.log_ar[0][epoch] = d_loss_real
-            self.log_ar[1][epoch] = d_loss_fake
-            self.log_ar[2][epoch] = d_loss
-            self.log_ar[3][epoch] = g_loss
-            self.log_ar[4][epoch] = mut_success_rate
-            self.log_discriminator_tf_summary(g_loss, *d_loss)
+            if epoch % self.log_interval == 0 and self.collect_logs:
+                self.log_ar[0][epoch] = d_loss_real
+                self.log_ar[1][epoch] = d_loss_fake
+                self.log_ar[2][epoch] = d_loss
+                self.log_ar[3][epoch] = g_loss
+                self.log_ar[4][epoch] = mut_success_rate
+                self.log_tf_summary(g_loss, *d_loss)
 
             # If at mutation interval => create and verify new mutations
+            logs_were_collected_during_mut = False
             if epoch % self.mutation_interval == 0 and self.enable_mutations:
                 mut_success_rate[1] += 1
 
@@ -268,7 +293,7 @@ class ModEGAN:
 
                 print(f"\nCalculating mutations with p = {mut_probability:.3%}")
                 mutations = self.create_mutations(prob=mut_probability)
-                new_params = self.compare_mutations(mutations)
+                new_params, new_d_loss_fake = self.compare_mutations(mutations)
 
                 # Use mutated parameters of the model
                 # if they better obfuscate the discriminator
@@ -276,6 +301,15 @@ class ModEGAN:
                     mut_success_rate[0] += 1
                     print("Applying new parameters!")
                     self.generator.layers[1].set_weights(new_params)
+
+                    # Rewriting logs with new values after mutation
+                    new_d_loss = 0.5 * np.add(d_loss_real[0], new_d_loss_fake)
+                    if self.collect_logs:
+                        logs_were_collected_during_mut = True
+                        self.log_tf_summary(g_loss, new_d_loss,
+                                            include_layers=False,
+                                            add_step=False)
+                        self.train_writer.flush()
                 else:
                     print("Mutation unsuccessful, keeping old parameters.\n")
 
@@ -288,6 +322,15 @@ class ModEGAN:
                     f"[G loss: {g_loss:.4}] [Mutations success rate "
                     f"{mut_success_rate[0]}/{mut_success_rate[1]}]"
                 )
+
+                # Update TensorBoard stats
+                if self.collect_logs and not logs_were_collected_during_mut:
+                    self.log_tf_summary(g_loss, *d_loss,
+                                        include_layers=True,
+                                        add_step=False)
+                    self.train_writer.flush()
+
+                # Generate the image
                 self.sample_images(epoch)
 
     def sample_images(self, epoch):
@@ -310,7 +353,10 @@ class ModEGAN:
         fig.savefig(f"images/ker_{epoch}_m{self.enable_mutations}.png")
         plt.close()
 
-    def log_discriminator_tf_summary(self, g_loss, d_loss, d_accuracy=None):
+    def log_tf_summary(self, g_loss, d_loss, d_accuracy=None,
+                       include_layers=False, add_step=True):
+        if add_step:
+            self.train_step += 1
         with self.train_writer.as_default():
             tf.summary.scalar("Generator loss",
                               g_loss, step=self.train_step)
@@ -319,7 +365,23 @@ class ModEGAN:
             if d_accuracy is not None:
                 tf.summary.scalar("Discriminator accuracy",
                                   d_accuracy, step=self.train_step)
-            self.train_step += 1
+
+            if include_layers:
+                dict_of_layers = {
+                    "Gen": self.generator.layers,
+                    "Disc": self.discriminator.layers,
+                    "Comb": self.combined.layers,
+                }
+                for model_name, model_layers in dict_of_layers.items():
+                    for layer_ind in range(1, len(model_layers)):
+                        for param_ind, param in enumerate(
+                                model_layers[layer_ind].get_weights()
+                        ):
+                            tf.summary.histogram(
+                                f"Gen_lid{layer_ind}_pid{param_ind}",
+                                data=param,
+                                step=self.train_step
+                            )
 
     def save_log_info(self, path="logs/"):
         # Creating DataFrames from the collected log info
@@ -355,10 +417,11 @@ if __name__ == '__main__':
         epochs=30_000,
         batch_size=32,
         sample_interval=200,
-        n_mut=150,
+        enable_mutations=True,
+        n_mut=50,
         mutation_prob=0.02,
-        mutation_interval=1000,
+        mutation_interval=2000,
     )
-    gan.enable_mutations = False
+    gan.collect_logs = True
     gan.train()
-    gan.save_log_info()
+    # gan.save_log_info()
