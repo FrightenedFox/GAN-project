@@ -1,11 +1,10 @@
 from __future__ import print_function, division
 
-from keras.datasets import mnist
-from keras.layers import Input, Dense, Reshape, Flatten
-from keras.layers import BatchNormalization
-from keras.layers.advanced_activations import LeakyReLU
-from keras.models import Sequential, Model
-from keras.optimizers import Adam
+from tensorflow.keras.datasets import mnist
+from tensorflow.keras.layers import Input, Dense, Reshape, Flatten
+from tensorflow.keras.layers import BatchNormalization, LeakyReLU
+from tensorflow.keras.models import Sequential, Model
+from tensorflow.keras.optimizers import Adam
 
 import tensorflow as tf
 import matplotlib.pyplot as plt
@@ -346,7 +345,7 @@ class ModEGAN:
                     if self.collect_logs:
                         logs_were_collected_during_mut = True
                         self.log_tf_summary(g_loss, new_d_loss,
-                                            include_layers=False,
+                                            include_layers=True,
                                             add_step=False)
                         self.train_writer.flush()
                 else:
@@ -465,11 +464,11 @@ if __name__ == '__main__':
         batch_size=32,
         sample_interval=200,
         enable_mutations=True,
-        n_mut=100,
+        n_mut=150,
         mutation_prob=0.02,
         mutation_interval=1000,
-        combined_mutation_mode=False
+        combined_mutation_mode=True
     )
-    gan.collect_logs = False
+    # gan.collect_logs = False
     # gan.enable_selection = True
     gan.train()
