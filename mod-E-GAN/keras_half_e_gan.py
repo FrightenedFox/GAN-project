@@ -425,7 +425,7 @@ class ModEGAN:
                                 model_layers[layer_ind].get_weights()
                         ):
                             tf.summary.histogram(
-                                f"Gen_lid{layer_ind}_pid{param_ind}",
+                                f"{model_name}_lid{layer_ind}_pid{param_ind}",
                                 data=param,
                                 step=self.train_step
                             )
@@ -466,10 +466,10 @@ if __name__ == '__main__':
         sample_interval=200,
         enable_mutations=True,
         n_mut=100,
-        mutation_prob=0.002,
+        mutation_prob=0.02,
         mutation_interval=1000,
         combined_mutation_mode=False
     )
-    # gan.collect_logs = False
+    gan.collect_logs = False
     # gan.enable_selection = True
     gan.train()
