@@ -111,17 +111,6 @@ class ModEGAN:
         self.combined = Model(z, validity)
         self.combined.compile(loss='binary_crossentropy', optimizer=optimizer)
 
-        # Initializing the generator to compare future mutations.
-        if self._combined_mutation_mode:
-            self.mut_compare_generator = Model(z, validity)
-            self.mut_compare_generator.compile(
-                loss='binary_crossentropy',
-                optimizer=optimizer
-            )
-        else:
-            self.mut_compare_generator = self.build_generator(summary=False)
-            self.mut_compare_generator.trainable = False
-
     def get_model_name(self):
         self.update_model_name()
         return self.UNIQUE_MODEL_NAME
@@ -201,6 +190,7 @@ class ModEGAN:
             for mut_ind in range(n_mut_and_sel):
                 mutated_params[mut_ind][param_ind] = mut_engine.\
                     mutations[mut_ind].reshape(param.shape)
+        del mut_engine
         return mutated_params
 
     def compare_mutations(self, mutations, mut_log_number=0, n_tests=16):
@@ -208,13 +198,14 @@ class ModEGAN:
         noise = np.random.normal(0, 1, (n_tests, self.latent_dim))
         if self._combined_mutation_mode:
             valid = np.ones((n_tests, 1))
-            for mut_ind, mutation in enumerate(mutations):
-                self.mut_compare_generator.layers[1].set_weights(mutation)
-                mut_loss_res[mut_ind] = self.mut_compare_generator.\
-                    test_on_batch(noise, valid)
-
+            original_parameters = self.combined.layers[1].get_weights()
             curr_loss = self.combined.test_on_batch(noise, valid)
+            for mut_ind, mutation in enumerate(mutations):
+                self.combined.layers[1].set_weights(mutation)
+                mut_loss_res[mut_ind] = self.combined.test_on_batch(noise,
+                                                                    valid)
 
+            self.combined.layers[1].set_weights(original_parameters)
             extreme_direction = "smaller"
             extreme_ind = np.argmin(mut_loss_res)
             to_print_and_log = np.copy(mut_loss_res)
@@ -222,17 +213,18 @@ class ModEGAN:
 
         else:
             fake = np.zeros((n_tests, 1))
+            curr_loss = self.discriminator.test_on_batch(
+                self.generator(noise),
+                fake
+            )[0]
+            original_parameters = self.discriminator.layers[1].get_weights()
             for mut_ind, mutation in enumerate(mutations):
-                self.mut_compare_generator.layers[1].set_weights(mutation)
-                gen_eval_imgs = self.mut_compare_generator.predict(noise)
+                self.discriminator.layers[1].set_weights(mutation)
+                gen_eval_imgs = self.discriminator.predict(noise)
                 mut_loss_res[mut_ind] = self.discriminator. \
                     test_on_batch(gen_eval_imgs, fake)[0]
 
-            curr_loss = self.discriminator.test_on_batch(
-                        self.generator(noise),
-                        fake
-            )[0]
-
+            self.generator.layers[1].set_weights(original_parameters)
             extreme_direction = "larger"
             extreme_ind = np.argmax(mut_loss_res)
             to_print_and_log = np.copy(mut_loss_res)
@@ -312,7 +304,8 @@ class ModEGAN:
 
             # If at mutation interval => create and verify new mutations
             logs_were_collected_during_mut = False
-            if epoch % self.mutation_interval == 0 and self.enable_mutations:
+            if epoch % self.mutation_interval == 0 and self.enable_mutations \
+                    and epoch:  # equivalent to epoch != 0
                 mut_success_rate[1] += 1
 
                 # If mutation probability reducer is not None, then
@@ -327,8 +320,9 @@ class ModEGAN:
                     weights = self.generator.layers[1].get_weights()
 
                 print(f"\nCalculating mutations with p = {mut_probability:.4%}")
-                mutations = self.create_mutations(weights, prob=mut_probability)
-                new_params, new_d_loss_fake = self.compare_mutations(mutations)
+                new_params, new_d_loss_fake = self.compare_mutations(
+                    self.create_mutations(weights, prob=mut_probability)
+                )
 
                 # Use mutated parameters of the model
                 # if they better obfuscate the discriminator
@@ -464,11 +458,12 @@ if __name__ == '__main__':
         batch_size=32,
         sample_interval=200,
         enable_mutations=True,
-        n_mut=150,
-        mutation_prob=0.02,
+        n_mut=250,
+        mutation_prob=0.0008,
         mutation_interval=1000,
         combined_mutation_mode=True
     )
+    gan.mut_prob_reducer = None
     # gan.collect_logs = False
     # gan.enable_selection = True
     gan.train()
