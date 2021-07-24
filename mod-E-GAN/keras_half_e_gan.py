@@ -26,7 +26,8 @@ class ModEGAN:
                  enable_mutations=True,
                  mutation_interval=3000,
                  n_mut=10,
-                 mutation_prob=0.02):
+                 mutation_prob=0.02,
+                 combined_mutation_mode=True):
 
         # General attributes
         self.batch_size = batch_size
@@ -42,7 +43,7 @@ class ModEGAN:
         self.n_selections = 1
         # Define whether to update parameters on the self.combined or
         # the self.generator:
-        self.combined_mutation_mode = 1
+        self._combined_mutation_mode = combined_mutation_mode
 
         # Input attributes
         self.img_rows, self.img_cols, self.channels = self.img_shape = (
@@ -112,7 +113,7 @@ class ModEGAN:
         self.combined.compile(loss='binary_crossentropy', optimizer=optimizer)
 
         # Initializing the generator to compare future mutations.
-        if self.combined_mutation_mode:
+        if self._combined_mutation_mode:
             self.mut_compare_generator = Model(z, validity)
             self.mut_compare_generator.compile(
                 loss='binary_crossentropy',
@@ -203,10 +204,10 @@ class ModEGAN:
                     mutations[mut_ind].reshape(param.shape)
         return mutated_params
 
-    def compare_mutations(self, mutations, mut_log_number=0, n_tests=32):
+    def compare_mutations(self, mutations, mut_log_number=0, n_tests=16):
         mut_loss_res = np.empty(len(mutations))
         noise = np.random.normal(0, 1, (n_tests, self.latent_dim))
-        if self.combined_mutation_mode:
+        if self._combined_mutation_mode:
             valid = np.ones((n_tests, 1))
             for mut_ind, mutation in enumerate(mutations):
                 self.mut_compare_generator.layers[1].set_weights(mutation)
@@ -244,9 +245,9 @@ class ModEGAN:
         ]
         print(f"Current loss {curr_loss:.4}\n"
               f"Best mutations ({extreme_direction} is better):\n\t",
-              to_print_and_log[:6])
+              to_print_and_log[:3], to_print_and_log[-3:])
         if ((mut_loss_res[extreme_ind] > curr_loss) ^
-                self.combined_mutation_mode):
+                self._combined_mutation_mode):
             return mutations[int(extreme_ind)], mut_loss_res[extreme_ind]
         return None, None
 
@@ -321,7 +322,7 @@ class ModEGAN:
                 if self.mut_prob_reducer is not None:
                     mut_probability /= epoch / self.mut_prob_reducer + 1
 
-                if self.combined_mutation_mode:
+                if self._combined_mutation_mode:
                     weights = self.combined.layers[1].get_weights()
                 else:
                     weights = self.generator.layers[1].get_weights()
@@ -335,7 +336,7 @@ class ModEGAN:
                 if new_params is not None:
                     mut_success_rate[0] += 1
                     print("Applying new parameters!\n")
-                    if self.combined_mutation_mode:
+                    if self._combined_mutation_mode:
                         self.combined.layers[1].set_weights(new_params)
                     else:
                         self.generator.layers[1].set_weights(new_params)
@@ -460,13 +461,14 @@ class ModEGAN:
 
 if __name__ == '__main__':
     gan = ModEGAN(
-        epochs=35_000,
+        epochs=30_000,
         batch_size=32,
         sample_interval=200,
-        enable_mutations=False,
-        n_mut=50,
-        mutation_prob=0.02,
+        enable_mutations=True,
+        n_mut=100,
+        mutation_prob=0.002,
         mutation_interval=1000,
+        combined_mutation_mode=False
     )
     # gan.collect_logs = False
     # gan.enable_selection = True
