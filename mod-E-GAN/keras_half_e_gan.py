@@ -459,7 +459,7 @@ if __name__ == '__main__':
         sample_interval=200,
         enable_mutations=True,
         n_mut=250,
-        mutation_prob=0.0008,
+        mutation_prob=0.0001,
         mutation_interval=1000,
         combined_mutation_mode=True
     )
