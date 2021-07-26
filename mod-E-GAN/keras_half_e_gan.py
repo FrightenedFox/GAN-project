@@ -334,10 +334,9 @@ class ModEGAN:
                 else:
                     weights = self.generator.layers[1].get_weights()
 
-                print(f"\nCalculating mutations with p = {mut_probability:.4%}")
+                print(f"\nCalculating mutations with p = {mut_probability:.5%}")
                 new_params, new_d_loss_fake = self.compare_mutations(
-                    self.create_mutations(weights, prob=mut_probability)
-                )
+                    self.create_mutations(weights, prob=mut_probability))
 
                 # Use mutated parameters of the model
                 # if they better obfuscate the discriminator

@@ -160,7 +160,7 @@ class EvoMod:
         min_ind = np.argmin(self.mut_res)
         to_print = np.copy(self.mut_res)
         to_print.sort()
-        print("\nCurrent loss %4f\nBest mutations:" % (curr_loss.numpy()),
+        print(f"\nCurrent loss {curr_loss.numpy():.4f}\nBest mutations:",
               to_print[:6])
         if self.mut_res[min_ind] < curr_loss.numpy():
             return self.params2device(
@@ -293,7 +293,7 @@ for epoch in range(opt.n_epochs):
         if batches_done % opt.mutation_interval == 0 and opt.enable_mutations:
             mut_counter += 1
             print(f"Calculating mutations with "
-                  f"p = {opt.mutation_prob / (epoch + 1):.4%}")
+                  f"p = {opt.mutation_prob / (epoch + 1):.5%}")
             em = EvoMod(generator.state_dict(),
                         discriminator.state_dict(),
                         n_mut=opt.n_mutations)
@@ -311,12 +311,11 @@ for epoch in range(opt.n_epochs):
             save_image(gen_imgs.data[:25],
                        f"images/{UNIQUE_MODEL_NAME}/{batches_done}.png",
                        nrow=5, normalize=True)
-            print(
-                "[Epoch %d/%d] [Batch %d/%d] [D loss: %f] [G loss: %f]"
-                % (epoch, opt.n_epochs, i, len(dataloader), d_loss.item(),
-                   g_loss.item()),
-                "[Mutations success rate %d/%d]" % (good_mut, mut_counter)
-            )
+            print(f"[Epoch {epoch:d}/{opt.n_epochs}] "
+                  f"[Batch {i:d}/{len(dataloader):d}] "
+                  f"[D loss: {d_loss.item():.3f}] "
+                  f"[G loss: {g_loss.item():.3f}] "
+                  f"[Mutations success rate {good_mut:d}/{mut_counter:d}]")
 
 make_animation(f"images/{UNIQUE_MODEL_NAME}/",
                f"images/{UNIQUE_MODEL_NAME}/animation.gif")
