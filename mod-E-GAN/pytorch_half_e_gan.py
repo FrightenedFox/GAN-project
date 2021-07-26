@@ -6,23 +6,22 @@ from collections import OrderedDict
 import torchvision.transforms as transforms
 from torchvision.utils import save_image
 
+import glob
+import imageio
+from datetime import datetime
 from torch.utils.data import DataLoader
 from torchvision import datasets
 from torch.autograd import Variable
 
 import torch.nn as nn
-# import torch.nn.functional as F
 import torch
 
 from bit_operations import BitOps
 
-
-os.makedirs("images", exist_ok=True)
-
 parser = argparse.ArgumentParser()
 parser.add_argument("--n_epochs", type=int, default=200,
                     help="number of epochs of training")
-parser.add_argument("--batch_size", type=int, default=64,
+parser.add_argument("--batch_size", type=int, default=128,
                     help="size of the batches")
 parser.add_argument("--lr", type=float, default=0.0002,
                     help="adam: learning rate")
@@ -41,6 +40,8 @@ parser.add_argument("--channels", type=int, default=1,
 parser.add_argument("--sample_interval", type=int, default=400,
                     help="interval between image samples")
 
+parser.add_argument("--enable_mutations", type=bool, default=True,
+                    help="whether to generate mutations")
 parser.add_argument("--n_mutations", type=int, default=25,
                     help="number of the mutations per parameter")
 parser.add_argument("--mutation_prob", type=float, default=0.02,
@@ -54,6 +55,15 @@ img_shape = (opt.channels, opt.img_size, opt.img_size)
 
 cuda = True if torch.cuda.is_available() else False
 print("Is cuda enabled?", "YES" if cuda else "NO")
+
+model_name_suffix = (f"_m{opt.enable_mutations}"
+                     f"_ep{opt.n_epochs}_bs{opt.batch_size}"
+                     f"_nm{opt.n_mutations}_mp{opt.mutation_prob}"
+                     f"_mi{opt.mutation_interval}")
+UNIQUE_MODEL_NAME = (f"PyTorch_t{datetime.now().strftime('%m%d_%H%M%S')}"
+                     f"{model_name_suffix}")
+
+os.makedirs(f"images/{UNIQUE_MODEL_NAME}/", exist_ok=True)
 
 
 class Generator(nn.Module):
@@ -120,6 +130,7 @@ class EvoMod:
                 self.mutated_dicts[mut_ind][key] = torch.from_numpy(
                     mut_engine.mutations[mut_ind].reshape(param.shape)
                 )
+            del mut_engine
         return self.mutated_dicts
 
     def compare_mutations(self, n_tests=10):
@@ -180,6 +191,15 @@ class EvoMod:
         return out_params
 
 
+def make_animation(folder_with_imgs, output_path):
+    with imageio.get_writer(output_path, mode='I') as writer:
+        filenames = glob.glob(f"{folder_with_imgs}/*.png")
+        filenames = sorted(filenames)
+        for filename in filenames:
+            image = imageio.imread(filename)
+            writer.append_data(image)
+
+
 # Loss function
 adversarial_loss = torch.nn.BCELoss()
 
@@ -216,6 +236,9 @@ optimizer_D = torch.optim.Adam(discriminator.parameters(),
 
 Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
 
+seed = Variable(
+    Tensor(np.random.normal(0, 1, (opt.batch_size, opt.latent_dim))))
+
 # ----------
 #  Training
 # ----------
@@ -240,8 +263,7 @@ for epoch in range(opt.n_epochs):
 
         # Sample noise as generator input
         z = Variable(Tensor(np.random.normal(
-            0, 1, (imgs.shape[0], opt.latent_dim)
-        )))
+            0, 1, (imgs.shape[0], opt.latent_dim))))
 
         # Generate a batch of images
         gen_imgs = generator(z)
@@ -268,10 +290,10 @@ for epoch in range(opt.n_epochs):
         optimizer_D.step()
 
         batches_done = epoch * len(dataloader) + i
-        if batches_done % opt.mutation_interval == 0:
+        if batches_done % opt.mutation_interval == 0 and opt.enable_mutations:
             mut_counter += 1
-            print("Calculating mutations with p = %5f... " %
-                  (opt.mutation_prob / (epoch + 1)), end="")
+            print(f"Calculating mutations with "
+                  f"p = {opt.mutation_prob / (epoch + 1):.4%}")
             em = EvoMod(generator.state_dict(),
                         discriminator.state_dict(),
                         n_mut=opt.n_mutations)
@@ -285,8 +307,9 @@ for epoch in range(opt.n_epochs):
                 print("Mutation unsuccessful, keeping old params.")
 
         if batches_done % opt.sample_interval == 0:
+            gen_imgs = generator(seed)
             save_image(gen_imgs.data[:25],
-                       "images/torch_%d.png" % batches_done,
+                       f"images/{UNIQUE_MODEL_NAME}/{batches_done}.png",
                        nrow=5, normalize=True)
             print(
                 "[Epoch %d/%d] [Batch %d/%d] [D loss: %f] [G loss: %f]"
@@ -294,3 +317,7 @@ for epoch in range(opt.n_epochs):
                    g_loss.item()),
                 "[Mutations success rate %d/%d]" % (good_mut, mut_counter)
             )
+
+make_animation(f"images/{UNIQUE_MODEL_NAME}/",
+               f"images/{UNIQUE_MODEL_NAME}/animation.gif")
+

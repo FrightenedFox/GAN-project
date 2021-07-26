@@ -221,10 +221,10 @@ class TensorHalfEGAN:
             print("Mutation unsuccessful, keeping old parameters.\n")
             self.generator.layers[layer_id].set_weights(original_weights)
 
-    def generate_and_save_images(self, epoch, test_input):
+    def generate_and_save_images(self, epoch):
         # Notice `training` is set to False.
         # This is so all layers run in inference mode (batchnorm).
-        predictions = self.generator(test_input, training=False)
+        predictions = self.generator(self.seed, training=False)
         fig = plt.figure(figsize=(4, 4))
 
         for i in range(predictions.shape[0]):
@@ -244,14 +244,13 @@ class TensorHalfEGAN:
                 self.train_step(image_batch)
 
             # Produce images for the GIF as you go
-            self.generate_and_save_images(epoch + 1,
-                                          self.seed)
+            self.generate_and_save_images(epoch + 1)
 
             # Save the model every 15 epochs
             if (epoch + 1) % 15 == 0:
                 self.checkpoint.save(file_prefix=self.checkpoint_prefix)
 
-            if self.enable_mutations:
+            if self.enable_mutations and epoch >= 60:
                 self.create_mutations()
                 print(f"Mutation success rate: {self.n_successful_mutations}/"
                       f"{self.n_mutations}")
@@ -260,8 +259,7 @@ class TensorHalfEGAN:
 
 
         # Generate after the final epoch
-        self.generate_and_save_images(self.epochs,
-                                      self.seed)
+        self.generate_and_save_images(self.epochs)
 
     def make_animation(self):
         with imageio.get_writer(self.anim_file, mode='I') as writer:
@@ -273,7 +271,7 @@ class TensorHalfEGAN:
 
 
 if __name__ == "__main__":
-    gan = TensorHalfEGAN(epochs=50,
+    gan = TensorHalfEGAN(epochs=120,
                          mut_prob=0.002,
                          n_mut=50,
                          enable_mutations=True)

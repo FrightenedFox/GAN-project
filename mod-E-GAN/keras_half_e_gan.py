@@ -6,6 +6,8 @@ from tensorflow.keras.layers import BatchNormalization, LeakyReLU
 from tensorflow.keras.models import Sequential, Model
 from tensorflow.keras.optimizers import Adam
 
+import glob
+import imageio
 import tensorflow as tf
 import matplotlib.pyplot as plt
 import numpy as np
@@ -14,6 +16,15 @@ import os
 from datetime import datetime
 
 from bit_operations import BitOps
+
+
+def make_animation(folder, output_path):
+    with imageio.get_writer(output_path, mode='I') as writer:
+        filenames = glob.glob(f"images/{folder}/*.png")
+        filenames = sorted(filenames)
+        for filename in filenames:
+            image = imageio.imread(filename)
+            writer.append_data(image)
 
 
 class ModEGAN:
@@ -64,6 +75,7 @@ class ModEGAN:
                                   f"_ep{self.epochs}_bs{self.batch_size}"
                                   f"_nm{self.n_mut}_mp{self.mutation_prob}"
                                   f"_mi{self.mutation_interval}")
+        # TODO: swap time and suffix and remove "Mod-E-GAN-" prefix
         self.UNIQUE_MODEL_NAME = (
             f"Mod-E-GAN-Keras-{self.model_name_suffix}"
             f"_t{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -84,6 +96,8 @@ class ModEGAN:
         )
         self.log_df, self.mutations_log_df = None, None
         self.train_step, self.train_writer = None, None
+        self.seed = tf.random.normal([self.batch_size, self.latent_dim])
+        # self.seed = np.random.normal(0, 1, (self.batch_size, self.latent_dim))
 
         optimizer = Adam(self.lr, self.beta1)
 
@@ -141,13 +155,13 @@ class ModEGAN:
     def build_generator(self, summary=True):
         model = Sequential()
 
-        model.add(Dense(256, input_dim=self.latent_dim))
+        model.add(Dense(128, input_dim=self.latent_dim))
+        model.add(LeakyReLU(alpha=0.2))
+        model.add(BatchNormalization(momentum=0.8))
+        model.add(Dense(256))
         model.add(LeakyReLU(alpha=0.2))
         model.add(BatchNormalization(momentum=0.8))
         model.add(Dense(512))
-        model.add(LeakyReLU(alpha=0.2))
-        model.add(BatchNormalization(momentum=0.8))
-        model.add(Dense(1024))
         model.add(LeakyReLU(alpha=0.2))
         model.add(BatchNormalization(momentum=0.8))
         model.add(Dense(np.prod(self.img_shape), activation='tanh'))
@@ -164,9 +178,9 @@ class ModEGAN:
         model = Sequential()
 
         model.add(Flatten(input_shape=self.img_shape))
-        model.add(Dense(512))
-        model.add(LeakyReLU(alpha=0.2))
         model.add(Dense(256))
+        model.add(LeakyReLU(alpha=0.2))
+        model.add(Dense(128))
         model.add(LeakyReLU(alpha=0.2))
         model.add(Dense(1, activation='sigmoid'))
         model.summary()
@@ -245,6 +259,7 @@ class ModEGAN:
     def train(self):
         self.update_model_name()
         imgs_folder_name = f"{self.UNIQUE_MODEL_NAME}"
+        animation_path = f"images/{imgs_folder_name}/animation.gif"
         os.makedirs(f"images/{imgs_folder_name}", exist_ok=True)
 
         # If collect logs => generate folders and writer for the logs
@@ -367,13 +382,11 @@ class ModEGAN:
                 image_sample = self.generate_image_sample()
                 self.save_images(image_sample, imgs_folder_name, epoch)
 
-    def generate_image_sample(self):
-        noise = np.random.normal(
-            0, 1,
-            (self.sample_image_rows * self.sample_image_cols, self.latent_dim)
-        )
-        gen_imgs = self.generator.predict(noise)
+        # Create an animation
+        make_animation(imgs_folder_name, animation_path)
 
+    def generate_image_sample(self):
+        gen_imgs = self.generator.predict(self.seed)
         # Rescale images 0 - 1
         return 0.5 * gen_imgs + 0.5
 
@@ -457,8 +470,8 @@ if __name__ == '__main__':
         epochs=30_000,
         batch_size=32,
         sample_interval=200,
-        enable_mutations=True,
-        n_mut=250,
+        enable_mutations=False,
+        n_mut=150,
         mutation_prob=0.0001,
         mutation_interval=1000,
         combined_mutation_mode=True
