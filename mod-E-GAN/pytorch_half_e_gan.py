@@ -21,7 +21,7 @@ from bit_operations import BitOps
 parser = argparse.ArgumentParser()
 parser.add_argument("--n_epochs", type=int, default=200,
                     help="number of epochs of training")
-parser.add_argument("--batch_size", type=int, default=128,
+parser.add_argument("--batch_size", type=int, default=64,
                     help="size of the batches")
 parser.add_argument("--lr", type=float, default=0.0002,
                     help="adam: learning rate")
@@ -319,4 +319,3 @@ for epoch in range(opt.n_epochs):
 
 make_animation(f"images/{UNIQUE_MODEL_NAME}/",
                f"images/{UNIQUE_MODEL_NAME}/animation.gif")
-

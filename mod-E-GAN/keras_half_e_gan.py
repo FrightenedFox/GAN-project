@@ -49,6 +49,7 @@ class ModEGAN:
         self.n_mut = n_mut
         self.mutation_prob = mutation_prob
         self.mut_prob_reducer = 40
+        # TODO: remove selection from this model
         self.enable_selection = False
         self.n_selections = 1
         # Define whether to update parameters on the self.combined or

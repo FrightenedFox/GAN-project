@@ -68,7 +68,9 @@ class TensorHalfEGAN:
                  enable_mutations=True,
                  num_examples_to_generate=16,
                  n_mut=50,
-                 mut_prob=0.002):
+                 mut_prob=0.002,
+                 enable_selection=False,
+                 n_selections=1):
 
         self.buffer_size = buffer_size
         self.batch_size = batch_size
@@ -87,10 +89,12 @@ class TensorHalfEGAN:
             "conv2d_transpose_1",
             "conv2d_transpose_2",
         ]
+        self.enable_selection = enable_selection
+        self.n_selections = n_selections
 
-        self.model_name_suffix = (f"_m{self.enable_mutations}"
-                                  f"_ep{self.epochs}_nm{self.n_mut}"
-                                  f"_mp{self.mut_prob}")
+        self.model_name_suffix = (f"_m{enable_mutations}"
+                                  f"_ep{epochs}_nm{n_mut}_mp{mut_prob}"
+                                  f"_sl{enable_selection}_ns{n_selections}")
         self.unique_model_name = (
             f"TF_orig_t{datetime.now().strftime('%m%d_%H%M%S')}"
             f"{self.model_name_suffix}"
@@ -173,6 +177,9 @@ class TensorHalfEGAN:
 
     def create_mutations(self):
         print(f"Calculating mutations with p = {self.mut_prob}")
+        n_mut_and_sel = self.n_mut
+        if self.enable_selection:
+            n_mut_and_sel *= (self.n_selections + 1)
         for layer_id, layer in enumerate(self.generator.layers):
             if layer.name in self.layers_to_mutate:
                 weights = layer.get_weights()
@@ -180,12 +187,14 @@ class TensorHalfEGAN:
                 print(f"Layer # {layer_id} --- {layer.name}")
                 template = [None for _ in range(weights_len)]
                 mutated_layer_params = [template.copy()
-                                        for _ in range(self.n_mut)]
+                                        for _ in range(n_mut_and_sel)]
                 for param_id, param in enumerate(weights):
                     in_shape = param.shape
                     mut_engine = BitOps(param.flatten())
-                    mut_engine.mutate(n_mut=self.n_mut, prob=self.mut_prob)
-                    for mut_id in range(self.n_mut):
+                    mut_engine.mutate(n_mut=self.n_mut, prob=self.mut_prob,
+                                      apply_selection=self.enable_selection,
+                                      n_selections=self.n_selections)
+                    for mut_id in range(n_mut_and_sel):
                         mutated_layer_params[mut_id][param_id] = mut_engine. \
                             mutations[mut_id].reshape(in_shape)
                     del mut_engine
@@ -205,12 +214,12 @@ class TensorHalfEGAN:
             mut_loss_res[mut_id] = self.cross_entropy(tf.zeros_like(fake_out),
                                                       fake_out)
         max_id = np.argmax(mut_loss_res)
-        to_print_and_log = np.copy(mut_loss_res)
-        to_print_and_log[::-1].sort()
+        to_print = np.copy(mut_loss_res)
+        to_print[::-1].sort()
 
         print(f"Current loss {curr_loss:.4}\n"
               f"Best mutations (larger is better):\t",
-              to_print_and_log[:5])
+              to_print[:5])
         self.n_mutations += 1
         if mut_loss_res[max_id] > curr_loss:
             print("Applying new parameters!\n")
@@ -250,7 +259,7 @@ class TensorHalfEGAN:
             if (epoch + 1) % 15 == 0:
                 self.checkpoint.save(file_prefix=self.checkpoint_prefix)
 
-            if self.enable_mutations and epoch >= 60:
+            if self.enable_mutations:
                 self.create_mutations()
                 print(f"Mutation success rate: {self.n_successful_mutations}/"
                       f"{self.n_mutations}")
@@ -274,6 +283,8 @@ if __name__ == "__main__":
     gan = TensorHalfEGAN(epochs=120,
                          mut_prob=0.002,
                          n_mut=50,
-                         enable_mutations=True)
+                         enable_mutations=True,
+                         enable_selection=True,
+                         n_selections=3)
     gan.train()
     gan.make_animation()

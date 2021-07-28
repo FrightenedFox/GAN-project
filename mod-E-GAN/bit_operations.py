@@ -2,7 +2,7 @@ import numpy as np
 
 
 class BitOps:
-    """Generates mutations and selections of the input vector.
+    """ Generates mutations and selections of the input vector.
 
     Parameters
     ----------
@@ -104,7 +104,7 @@ class BitOps:
         rng.shuffle(skeleton_1)
         rng.shuffle(skeleton_2)
         skeleton += rng.uniform(
-            size=(in_arr.shape[0] * n_selections, 1)
+            size=(in_arr.shape[0], 1)
         ) * (skeleton_1 - skeleton_2)
         out_arr = skeleton.reshape(in_arr.shape[0] * n_selections,
                                    *in_arr.shape[1:])
