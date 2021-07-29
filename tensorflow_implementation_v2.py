@@ -113,7 +113,7 @@ class TensorHalfEGAN:
         self.generator_optimizer = tf.keras.optimizers.Adam(1e-4)
         self.discriminator_optimizer = tf.keras.optimizers.Adam(1e-4)
 
-        checkpoint_dir = './training_checkpoints'
+        checkpoint_dir = '../training_checkpoints'
         self.checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt")
         self.checkpoint = tf.train.Checkpoint(
             generator_optimizer=self.generator_optimizer,
