@@ -58,7 +58,7 @@ def make_discriminator_model():
     return model
 
 
-class TensorHalfEGAN:
+class MutGAN:
 
     def __init__(self,
                  buffer_size=60000,
@@ -113,7 +113,8 @@ class TensorHalfEGAN:
         self.generator_optimizer = tf.keras.optimizers.Adam(1e-4)
         self.discriminator_optimizer = tf.keras.optimizers.Adam(1e-4)
 
-        checkpoint_dir = '../training_checkpoints'
+        checkpoint_dir = '/training_checkpoints'
+        os.makedirs(checkpoint_dir, exist_ok=True)
         self.checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt")
         self.checkpoint = tf.train.Checkpoint(
             generator_optimizer=self.generator_optimizer,
@@ -266,7 +267,6 @@ class TensorHalfEGAN:
 
             print(f"{8*'-'}\tEpoch {epoch + 1} time: {time.time() - start} sec")
 
-
         # Generate after the final epoch
         self.generate_and_save_images(self.epochs)
 
@@ -280,11 +280,11 @@ class TensorHalfEGAN:
 
 
 if __name__ == "__main__":
-    gan = TensorHalfEGAN(epochs=120,
-                         mut_prob=0.002,
-                         n_mut=50,
-                         enable_mutations=True,
-                         enable_selection=True,
-                         n_selections=3)
+    gan = MutGAN(epochs=120,
+                 mut_prob=0.002,
+                 n_mut=50,
+                 enable_mutations=True,
+                 enable_selection=True,
+                 n_selections=3)
     gan.train()
     gan.make_animation()

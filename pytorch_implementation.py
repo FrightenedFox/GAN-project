@@ -112,7 +112,7 @@ class Discriminator(nn.Module):
         return validity
 
 
-class EvoMod:
+class Mutator:
     def __init__(self, gen_state_dict, disc_state_dict, n_mut=5):
         self.gen_state_dict = self.params2device(gen_state_dict,
                                                  out_device="cpu")
@@ -123,6 +123,24 @@ class EvoMod:
         self.mut_res = np.empty(n_mut)
 
     def create_mutations(self, **kwargs):
+        """ Creates a list of mutated parameters of the model
+
+        Parameters
+        ----------
+        kwargs:
+            prob : float, optional
+                Probability of mutation. Default 0.05.
+
+            length : int, optional
+                Length of the bitstring. Default 56.
+
+            chunk_s : int, optional
+                Size of the single chunk. Default 8.
+
+        Returns
+        -------
+        List[OrderDict]
+        """
         for key, param in self.gen_state_dict.items():
             mut_engine = BitOps(param.numpy().flatten())
             mut_engine.mutate(n_mut=self.n_mut, **kwargs)
@@ -133,18 +151,32 @@ class EvoMod:
             del mut_engine
         return self.mutated_dicts
 
-    def compare_mutations(self, n_tests=10):
+    def compare_mutations(self, test_batch=16):
+        """ Compares mutations and returns either the best one or None.
+
+        Parameters
+        ----------
+        test_batch : int
+            The size of the batch on which each mutation is tested
+
+        Returns
+        -------
+        OrderedDict or None
+            None if all mutations appeared to be worse then the original
+            parameters and OrderedDict if there was at least one successful
+            mutation.
+        """
         gen_eval = Generator()
         disc_eval = Discriminator()
         adversarial_loss_eval = torch.nn.BCELoss()
         tensor_eval = torch.FloatTensor
 
         disc_eval.load_state_dict(self.disc_state_dict)
-        valid_eval = Variable(tensor_eval(n_tests, 1).fill_(1.0),
+        valid_eval = Variable(tensor_eval(test_batch, 1).fill_(1.0),
                               requires_grad=False)
         z_eval = Variable(tensor_eval(np.random.normal(
-            0, 1, (n_tests, opt.latent_dim)
-        )))
+            0, 1, (test_batch, opt.latent_dim))))
+
         for mut_ind in range(self.n_mut):
             gen_eval.load_state_dict(self.mutated_dicts[mut_ind])
             with torch.no_grad():
@@ -163,10 +195,8 @@ class EvoMod:
         print(f"\nCurrent loss {curr_loss.numpy():.4f}\nBest mutations:",
               to_print[:6])
         if self.mut_res[min_ind] < curr_loss.numpy():
-            return self.params2device(
-                self.mutated_dicts[int(min_ind)],
-                out_device="cuda:0" if cuda else "cpu"
-            )
+            return self.params2device(self.mutated_dicts[int(min_ind)],
+                                      out_device="cuda:0" if cuda else "cpu")
         return None
 
     @staticmethod
@@ -294,9 +324,9 @@ for epoch in range(opt.n_epochs):
             mut_counter += 1
             print(f"Calculating mutations with "
                   f"p = {opt.mutation_prob / (epoch + 1):.5%}")
-            em = EvoMod(generator.state_dict(),
-                        discriminator.state_dict(),
-                        n_mut=opt.n_mutations)
+            em = Mutator(generator.state_dict(),
+                         discriminator.state_dict(),
+                         n_mut=opt.n_mutations)
             em.create_mutations(prob=opt.mutation_prob / (epoch + 1))
             new_params = em.compare_mutations()
             if new_params is not None:

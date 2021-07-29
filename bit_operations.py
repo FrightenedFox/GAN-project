@@ -111,7 +111,8 @@ class BitOps:
         return out_arr
 
     def mutate(self, n_mut, apply_selection=False, n_selections=1, **kwargs):
-        """ Creates mutations of the original array
+        """ Creates mutations of the original array, stores them in class
+        attribute `mutations` and returns it.
 
         Parameters
         ----------
@@ -130,6 +131,11 @@ class BitOps:
 
             chunk_s : int, optional
                 Size of the single chunk. Default 8.
+
+        Returns
+        -------
+        np.array
+            The vector with mutations
         """
         out_shape = [n_mut, *self._in_shape]
         self._gen_mut_masks(n_mut, **kwargs)
@@ -142,12 +148,3 @@ class BitOps:
             self.mutations = np.concatenate((self.mutations, selection_res))
             return self.mutations
         return self.mutations
-
-
-# TODO: remove this in the final version
-if __name__ == "__main__":
-    bit_ops_ = BitOps(np.array([0.234, -1.23, 12.625]))
-    print(bit_ops_.mutate(n_mut=3, apply_selection=True,
-                          n_selections=1, prob=0.01))
-    # test_bits = BitOps(np.random.normal(0, 1000, 100000))
-    # test_bits.mutate(n_mut=100, apply_selection=True, n_selections=10)

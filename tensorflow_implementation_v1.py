@@ -27,7 +27,7 @@ def make_animation(folder, output_path):
             writer.append_data(image)
 
 
-class ModEGAN:
+class MutGAN:
 
     def __init__(self,
                  batch_size=128,
@@ -49,9 +49,6 @@ class ModEGAN:
         self.n_mut = n_mut
         self.mutation_prob = mutation_prob
         self.mut_prob_reducer = 40
-        # TODO: remove selection from this model
-        self.enable_selection = False
-        self.n_selections = 1
         # Define whether to update parameters on the self.combined or
         # the self.generator:
         self._combined_mutation_mode = combined_mutation_mode
@@ -63,7 +60,7 @@ class ModEGAN:
         self.latent_dim = 100
 
         # Training tuning attributes
-        self.lr = 2e-4  # learning rate
+        self.lr = 2e-4
         self.beta1 = 0.5
 
         # Samples and logs
@@ -76,10 +73,9 @@ class ModEGAN:
                                   f"_ep{self.epochs}_bs{self.batch_size}"
                                   f"_nm{self.n_mut}_mp{self.mutation_prob}"
                                   f"_mi{self.mutation_interval}")
-        # TODO: swap time and suffix and remove "Mod-E-GAN-" prefix
         self.UNIQUE_MODEL_NAME = (
-            f"Mod-E-GAN-Keras-{self.model_name_suffix}"
-            f"_t{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            f"TensorFlow_V1_t{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            f"{self.model_name_suffix}"
         )
 
         # Adding logging variables
@@ -156,13 +152,13 @@ class ModEGAN:
     def build_generator(self, summary=True):
         model = Sequential()
 
-        model.add(Dense(128, input_dim=self.latent_dim))
-        model.add(LeakyReLU(alpha=0.2))
-        model.add(BatchNormalization(momentum=0.8))
-        model.add(Dense(256))
+        model.add(Dense(256, input_dim=self.latent_dim))
         model.add(LeakyReLU(alpha=0.2))
         model.add(BatchNormalization(momentum=0.8))
         model.add(Dense(512))
+        model.add(LeakyReLU(alpha=0.2))
+        model.add(BatchNormalization(momentum=0.8))
+        model.add(Dense(1024))
         model.add(LeakyReLU(alpha=0.2))
         model.add(BatchNormalization(momentum=0.8))
         model.add(Dense(np.prod(self.img_shape), activation='tanh'))
@@ -179,9 +175,9 @@ class ModEGAN:
         model = Sequential()
 
         model.add(Flatten(input_shape=self.img_shape))
-        model.add(Dense(256))
+        model.add(Dense(512))
         model.add(LeakyReLU(alpha=0.2))
-        model.add(Dense(128))
+        model.add(Dense(256))
         model.add(LeakyReLU(alpha=0.2))
         model.add(Dense(1, activation='sigmoid'))
         model.summary()
@@ -192,18 +188,12 @@ class ModEGAN:
 
     def create_mutations(self, weights, **kwargs):
         template = [None for _ in range(len(weights))]
-        n_mut_and_sel = self.n_mut
-        if self.enable_selection:
-            n_mut_and_sel *= (self.n_selections + 1)
-        mutated_params = [template.copy() for _ in range(n_mut_and_sel)]
+        mutated_params = [template.copy() for _ in range(self.n_mut)]
         for param_ind, param in enumerate(weights):
             mut_engine = BitOps(param.flatten())
-            mut_engine.mutate(n_mut=self.n_mut,
-                              apply_selection=self.enable_selection,
-                              n_selections=self.n_selections,
-                              **kwargs)
-            for mut_ind in range(n_mut_and_sel):
-                mutated_params[mut_ind][param_ind] = mut_engine.\
+            mut_engine.mutate(n_mut=self.n_mut, **kwargs)
+            for mut_ind in range(self.n_mut):
+                mutated_params[mut_ind][param_ind] = mut_engine. \
                     mutations[mut_ind].reshape(param.shape)
         del mut_engine
         return mutated_params
@@ -466,7 +456,7 @@ class ModEGAN:
 
 
 if __name__ == '__main__':
-    gan = ModEGAN(
+    gan = MutGAN(
         epochs=30_000,
         batch_size=32,
         sample_interval=200,
@@ -477,6 +467,4 @@ if __name__ == '__main__':
         combined_mutation_mode=True
     )
     gan.mut_prob_reducer = None
-    # gan.collect_logs = False
-    # gan.enable_selection = True
     gan.train()
