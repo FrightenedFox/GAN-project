@@ -19,7 +19,7 @@ import torch
 from bit_operations import BitOps
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--n_epochs", type=int, default=200,
+parser.add_argument("--n_epochs", type=int, default=10,
                     help="number of epochs of training")
 parser.add_argument("--batch_size", type=int, default=64,
                     help="size of the batches")
@@ -40,7 +40,7 @@ parser.add_argument("--channels", type=int, default=1,
 parser.add_argument("--sample_interval", type=int, default=400,
                     help="interval between image samples")
 
-parser.add_argument("--enable_mutations", type=bool, default=True,
+parser.add_argument("--enable_mutations", type=bool, default=False,
                     help="whether to generate mutations")
 parser.add_argument("--n_mutations", type=int, default=25,
                     help="number of the mutations per parameter")
@@ -110,6 +110,25 @@ class Discriminator(nn.Module):
         validity = self.model(img_flat)
 
         return validity
+
+
+def initialize_weights_for_tanh(model):
+    if isinstance(model, nn.Linear):
+        nn.init.xavier_uniform_(model.weight.data)
+        nn.init.constant_(model.bias.data, 0)
+    elif isinstance(model, nn.BatchNorm2d):
+        nn.init.constant_(model.weight.data, 1)
+        nn.init.constant_(model.bias.data, 0)
+
+
+def initialize_weights_for_sigmoid(model):
+    if isinstance(model, nn.Linear):
+        nn.init.xavier_normal_(model.weight.data)
+        nn.init.constant_(model.bias.data, 0)
+    elif isinstance(model, nn.BatchNorm2d):
+        nn.init.constant_(model.weight.data, 1)
+        nn.init.constant_(model.bias.data, 0)
+
 
 
 class Mutator:
@@ -236,6 +255,10 @@ adversarial_loss = torch.nn.BCELoss()
 # Initialize generator and discriminator
 generator = Generator()
 discriminator = Discriminator()
+# TODO: add parameter for disabling this behaviour
+# model.apply(initialize_weights)
+generator.apply(initialize_weights_for_tanh)
+discriminator.apply(initialize_weights_for_sigmoid)
 
 if cuda:
     generator.cuda()
