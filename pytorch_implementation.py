@@ -19,7 +19,7 @@ import torch
 from bit_operations import BitOps
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--n_epochs", type=int, default=10,
+parser.add_argument("--n_epochs", type=int, default=200,
                     help="number of epochs of training")
 parser.add_argument("--batch_size", type=int, default=64,
                     help="size of the batches")
@@ -42,28 +42,41 @@ parser.add_argument("--sample_interval", type=int, default=400,
 
 parser.add_argument("--enable_mutations", type=bool, default=False,
                     help="whether to generate mutations")
-parser.add_argument("--n_mutations", type=int, default=25,
+parser.add_argument("--n_mutations", type=int, default=20,
                     help="number of the mutations per parameter")
 parser.add_argument("--mutation_prob", type=float, default=0.02,
                     help="probability of the mutation")
-parser.add_argument("--mutation_interval", type=int, default=12000,
+parser.add_argument("--mutation_interval", type=int, default=6000,
                     help="interval between mutations")
 opt = parser.parse_args()
 print(opt)
 
-img_shape = (opt.channels, opt.img_size, opt.img_size)
 
-cuda = True if torch.cuda.is_available() else False
-print("Is cuda enabled?", "YES" if cuda else "NO")
+def make_animation(folder_with_imgs, output_path):
+    with imageio.get_writer(output_path, mode='I') as writer:
+        filenames = glob.glob(f"{folder_with_imgs}/*.png")
+        filenames = sorted(filenames)
+        for filename in filenames:
+            image = imageio.imread(filename)
+            writer.append_data(image)
 
-model_name_suffix = (f"_m{opt.enable_mutations}"
-                     f"_ep{opt.n_epochs}_bs{opt.batch_size}"
-                     f"_nm{opt.n_mutations}_mp{opt.mutation_prob}"
-                     f"_mi{opt.mutation_interval}")
-UNIQUE_MODEL_NAME = (f"PyTorch_t{datetime.now().strftime('%m%d_%H%M%S')}"
-                     f"{model_name_suffix}")
 
-os.makedirs(f"images/{UNIQUE_MODEL_NAME}/", exist_ok=True)
+def initialize_weights_for_tanh(model):
+    if isinstance(model, nn.Linear):
+        nn.init.xavier_uniform_(model.weight.data)
+        nn.init.constant_(model.bias.data, 0)
+    elif isinstance(model, nn.BatchNorm2d):
+        nn.init.constant_(model.weight.data, 1)
+        nn.init.constant_(model.bias.data, 0)
+
+
+def initialize_weights_for_sigmoid(model):
+    if isinstance(model, nn.Linear):
+        nn.init.xavier_normal_(model.weight.data)
+        nn.init.constant_(model.bias.data, 0)
+    elif isinstance(model, nn.BatchNorm2d):
+        nn.init.constant_(model.weight.data, 1)
+        nn.init.constant_(model.bias.data, 0)
 
 
 class Generator(nn.Module):
@@ -112,25 +125,6 @@ class Discriminator(nn.Module):
         return validity
 
 
-def initialize_weights_for_tanh(model):
-    if isinstance(model, nn.Linear):
-        nn.init.xavier_uniform_(model.weight.data)
-        nn.init.constant_(model.bias.data, 0)
-    elif isinstance(model, nn.BatchNorm2d):
-        nn.init.constant_(model.weight.data, 1)
-        nn.init.constant_(model.bias.data, 0)
-
-
-def initialize_weights_for_sigmoid(model):
-    if isinstance(model, nn.Linear):
-        nn.init.xavier_normal_(model.weight.data)
-        nn.init.constant_(model.bias.data, 0)
-    elif isinstance(model, nn.BatchNorm2d):
-        nn.init.constant_(model.weight.data, 1)
-        nn.init.constant_(model.bias.data, 0)
-
-
-
 class Mutator:
     def __init__(self, gen_state_dict, disc_state_dict, n_mut=5):
         self.gen_state_dict = self.params2device(gen_state_dict,
@@ -139,7 +133,6 @@ class Mutator:
                                                   out_device="cpu")
         self.n_mut = n_mut
         self.mutated_dicts = [OrderedDict() for _ in range(n_mut)]
-        self.mut_res = np.empty(n_mut)
 
     def create_mutations(self, **kwargs):
         """ Creates a list of mutated parameters of the model
@@ -170,7 +163,7 @@ class Mutator:
             del mut_engine
         return self.mutated_dicts
 
-    def compare_mutations(self, test_batch=16):
+    def compare_mutations(self, mutated_dicts=None, test_batch=128):
         """ Compares mutations and returns either the best one or None.
 
         Parameters
@@ -196,25 +189,28 @@ class Mutator:
         z_eval = Variable(tensor_eval(np.random.normal(
             0, 1, (test_batch, opt.latent_dim))))
 
-        for mut_ind in range(self.n_mut):
-            gen_eval.load_state_dict(self.mutated_dicts[mut_ind])
+        if mutated_dicts is None:
+            mutated_dicts = self.mutated_dicts
+        mut_res = np.empty(len(mutated_dicts))
+        for mut_ind in range(len(mutated_dicts)):
+            gen_eval.load_state_dict(mutated_dicts[mut_ind])
             with torch.no_grad():
                 gen_imgs_eval = gen_eval(z_eval)
                 loss_eval = adversarial_loss_eval(disc_eval(gen_imgs_eval),
                                                   valid_eval)
-            self.mut_res[mut_ind] = loss_eval
+            mut_res[mut_ind] = loss_eval
         gen_eval.load_state_dict(self.gen_state_dict)
         with torch.no_grad():
             curr_imgs = gen_eval(z_eval)
             curr_loss = adversarial_loss_eval(disc_eval(curr_imgs),
                                               valid_eval)
-        min_ind = np.argmin(self.mut_res)
-        to_print = np.copy(self.mut_res)
+        min_ind = np.argmin(mut_res)
+        to_print = np.copy(mut_res)
         to_print.sort()
         print(f"\nCurrent loss {curr_loss.numpy():.4f}\nBest mutations:",
               to_print[:6])
-        if self.mut_res[min_ind] < curr_loss.numpy():
-            return self.params2device(self.mutated_dicts[int(min_ind)],
+        if mut_res[min_ind] < curr_loss.numpy():
+            return self.params2device(mutated_dicts[int(min_ind)],
                                       out_device="cuda:0" if cuda else "cpu")
         return None
 
@@ -240,57 +236,64 @@ class Mutator:
         return out_params
 
 
-def make_animation(folder_with_imgs, output_path):
-    with imageio.get_writer(output_path, mode='I') as writer:
-        filenames = glob.glob(f"{folder_with_imgs}/*.png")
-        filenames = sorted(filenames)
-        for filename in filenames:
-            image = imageio.imread(filename)
-            writer.append_data(image)
+class ModelTraining:
 
+    def __init__(self):
+        # TODO move all opt parameters as a class attributes
+        img_shape = (opt.channels, opt.img_size, opt.img_size)
+        cuda = True if torch.cuda.is_available() else False
+        print("Is cuda enabled?", "YES" if cuda else "NO")
+        model_name_suffix = (f"_m{opt.enable_mutations}"
+                             f"_ep{opt.n_epochs}_bs{opt.batch_size}"
+                             f"_nm{opt.n_mutations}_mp{opt.mutation_prob}"
+                             f"_mi{opt.mutation_interval}")
+        UNIQUE_MODEL_NAME = (f"PyTorch_t{datetime.now().strftime('%m%d_%H%M%S')}"
+                             f"{model_name_suffix}")
+        mut_probabilities_list = [0.001, 0.0005, 0.0002, 0.0001, 0.00005, 0.00002, 0.00001]
+        os.makedirs(f"images/{UNIQUE_MODEL_NAME}/", exist_ok=True)
 
-# Loss function
-adversarial_loss = torch.nn.BCELoss()
+        # Loss function
+        adversarial_loss = torch.nn.BCELoss()
 
-# Initialize generator and discriminator
-generator = Generator()
-discriminator = Discriminator()
-# TODO: add parameter for disabling this behaviour
-# model.apply(initialize_weights)
-generator.apply(initialize_weights_for_tanh)
-discriminator.apply(initialize_weights_for_sigmoid)
+        # Initialize generator and discriminator
+        generator = Generator()
+        discriminator = Discriminator()
+        generator.apply(initialize_weights_for_tanh)
+        discriminator.apply(initialize_weights_for_sigmoid)
 
-if cuda:
-    generator.cuda()
-    discriminator.cuda()
-    adversarial_loss.cuda()
+        if cuda:
+            generator.cuda()
+            discriminator.cuda()
+            adversarial_loss.cuda()
 
-# Configure data loader
-dataloader = torch.utils.data.DataLoader(
-    datasets.MNIST(
-        "..",
-        train=True,
-        download=True,
-        transform=transforms.Compose(
-            [transforms.Resize(opt.img_size),
-             transforms.ToTensor(),
-             transforms.Normalize([0.5], [0.5])]
-        ),
-    ),
-    batch_size=opt.batch_size,
-    shuffle=True,
-)
+        # Configure data loader
+        dataloader = torch.utils.data.DataLoader(
+            datasets.MNIST(
+                "..",
+                train=True,
+                download=True,
+                transform=transforms.Compose(
+                    [transforms.Resize(opt.img_size),
+                     transforms.ToTensor(),
+                     transforms.Normalize([0.5], [0.5])]
+                ),
+            ),
+            batch_size=opt.batch_size,
+            shuffle=True,
+        )
 
-# Optimizers
-optimizer_G = torch.optim.Adam(generator.parameters(),
-                               lr=opt.lr, betas=(opt.b1, opt.b2))
-optimizer_D = torch.optim.Adam(discriminator.parameters(),
-                               lr=opt.lr, betas=(opt.b1, opt.b2))
+        # Optimizers
+        optimizer_G = torch.optim.Adam(generator.parameters(),
+                                       lr=opt.lr, betas=(opt.b1, opt.b2))
+        optimizer_D = torch.optim.Adam(discriminator.parameters(),
+                                       lr=opt.lr, betas=(opt.b1, opt.b2))
 
-Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
+        Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
 
-seed = Variable(
-    Tensor(np.random.normal(0, 1, (opt.batch_size, opt.latent_dim))))
+        seed = Variable(
+            Tensor(np.random.normal(0, 1, (opt.batch_size, opt.latent_dim))))
+
+    def train_epoch(self):
 
 # ----------
 #  Training
@@ -343,27 +346,82 @@ for epoch in range(opt.n_epochs):
         optimizer_D.step()
 
         batches_done = epoch * len(dataloader) + i
-        if batches_done % opt.mutation_interval == 0 and opt.enable_mutations:
-            mut_counter += 1
-            print(f"Calculating mutations with "
-                  f"p = {opt.mutation_prob / (epoch + 1):.5%}")
-            em = Mutator(generator.state_dict(),
-                         discriminator.state_dict(),
-                         n_mut=opt.n_mutations)
-            em.create_mutations(prob=opt.mutation_prob / (epoch + 1))
-            new_params = em.compare_mutations()
-            if new_params is not None:
-                good_mut += 1
-                print("Applying new params!")
-                generator.load_state_dict(new_params)
-            else:
-                print("Mutation unsuccessful, keeping old params.")
+        if batches_done % opt.mutation_interval == 0 and batches_done != 0 and opt.enable_mutations:
+            for mut_rep_ind in range(10):
+                print(f"\n\n-------Mut rep ind = {mut_rep_ind}-------\n")
+                # print(f"Calculating mutations with "
+                #       f"p = {opt.mutation_prob / (epoch + 1):.5%}")
+                mut_counter += 1
+                em = Mutator(generator.state_dict(),
+                             discriminator.state_dict(),
+                             n_mut=opt.n_mutations)
+                print("Starting mutation sequence:")
+                best_of_the_best = []
+                for mut_prob in mut_probabilities_list:
+                    print(f"prob = {mut_prob:.5%}", end="\t")
+                    # TODO: revert changes for the final model
+                    em.create_mutations(prob=mut_prob)
+                    new_params = em.compare_mutations()
+                    if new_params is not None:
+                        print("Adding the best mutation to the final comparison list")
+                        best_of_the_best.append(new_params)
+                    else:
+                        print("Mutation unsuccessful, skipping.")
+
+                if len(best_of_the_best) > 1:
+                    print("Starting to compare best mutations:")
+                    best_params = em.compare_mutations(best_of_the_best)
+                    if best_params is not None:
+                        gen_imgs = generator(seed)
+                        save_image(gen_imgs.data[:36],
+                                   f"images/{UNIQUE_MODEL_NAME}/m{batches_done + mut_rep_ind}.png",
+                                   nrow=6, normalize=True)
+                        good_mut += 1
+                        print("Applying new params!")
+                        generator.load_state_dict(best_params)
+
+                        # make images before and after mutation
+                        z = Variable(Tensor(np.random.normal(
+                            0, 1, (imgs.shape[0], opt.latent_dim))))
+                        gen_imgs = generator(seed)
+                        save_image(gen_imgs.data[:36],
+                                   f"images/{UNIQUE_MODEL_NAME}/m{batches_done + 1 + mut_rep_ind}.png",
+                                   nrow=6, normalize=True)
+                    else:
+                        print("Mutation unsuccessful, keeping old params.")
+                elif len(best_of_the_best) == 1:
+                    print("Applying the only mutation which passed.")
+                    gen_imgs = generator(seed)
+                    save_image(gen_imgs.data[:36],
+                               f"images/{UNIQUE_MODEL_NAME}/m{batches_done + mut_rep_ind}.png",
+                               nrow=6, normalize=True)
+                    good_mut += 1
+                    generator.load_state_dict(best_of_the_best[0])
+
+                    # make images before and after mutation
+                    z = Variable(Tensor(np.random.normal(
+                        0, 1, (imgs.shape[0], opt.latent_dim))))
+                    gen_imgs = generator(seed)
+                    save_image(gen_imgs.data[:36],
+                               f"images/{UNIQUE_MODEL_NAME}/m{batches_done + 1 + mut_rep_ind}.png",
+                               nrow=6, normalize=True)
+                else:
+                    print("Mutation unsuccessful, keeping old params.")
+
+                # em.create_mutations(prob=opt.mutation_prob / (epoch + 1))
+                # new_params = em.compare_mutations()
+                # if new_params is not None:
+                #     good_mut += 1
+                #     print("Applying new params!")
+                #     generator.load_state_dict(new_params)
+                # else:
+                #     print("Mutation unsuccessful, keeping old params.")
 
         if batches_done % opt.sample_interval == 0:
             gen_imgs = generator(seed)
-            save_image(gen_imgs.data[:25],
+            save_image(gen_imgs.data[:36],
                        f"images/{UNIQUE_MODEL_NAME}/{batches_done}.png",
-                       nrow=5, normalize=True)
+                       nrow=6, normalize=True)
             print(f"[Epoch {epoch:d}/{opt.n_epochs}] "
                   f"[Batch {i:d}/{len(dataloader):d}] "
                   f"[D loss: {d_loss.item():.3f}] "
