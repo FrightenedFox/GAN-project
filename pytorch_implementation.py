@@ -293,15 +293,21 @@ class ModelTraining:
         seed = Variable(
             Tensor(np.random.normal(0, 1, (opt.batch_size, opt.latent_dim))))
 
-    def train_epoch(self):
+    def save_image(self, generator):
+        gen_imgs = generator(seed)
+        save_image(gen_imgs.data[:36],
+                   f"images/{UNIQUE_MODEL_NAME}/{batches_done}.png",
+                   nrow=6, normalize=True)
 
-# ----------
-#  Training
-# ----------
-mut_counter, good_mut = 0, 0
-for epoch in range(opt.n_epochs):
-    for i, (imgs, _) in enumerate(dataloader):
+    def print_stats(self):
+        # TODO: add image prefix (such as "m2000" etc.)
+        print(f"[Epoch {epoch:d}/{opt.n_epochs}] "
+              f"[Batch {i:d}/{len(dataloader):d}] "
+              f"[D loss: {d_loss.item():.3f}] "
+              f"[G loss: {g_loss.item():.3f}] "
+              f"[Mutations success rate {good_mut:d}/{mut_counter:d}]")
 
+    def train_epoch(self, imgs):
         # Adversarial ground truths
         valid = Variable(Tensor(imgs.size(0), 1).fill_(1.0),
                          requires_grad=False)
@@ -345,88 +351,63 @@ for epoch in range(opt.n_epochs):
         d_loss.backward()
         optimizer_D.step()
 
-        batches_done = epoch * len(dataloader) + i
+    def trainer(self):
+        mut_counter, good_mut = 0, 0
+        for epoch in range(opt.n_epochs):
+            for i, (imgs, _) in enumerate(dataloader):
+                batches_done = epoch * len(dataloader) + i
+                self.train_epoch()
+            
         if batches_done % opt.mutation_interval == 0 and batches_done != 0 and opt.enable_mutations:
-            for mut_rep_ind in range(10):
-                print(f"\n\n-------Mut rep ind = {mut_rep_ind}-------\n")
-                # print(f"Calculating mutations with "
-                #       f"p = {opt.mutation_prob / (epoch + 1):.5%}")
-                mut_counter += 1
-                em = Mutator(generator.state_dict(),
-                             discriminator.state_dict(),
-                             n_mut=opt.n_mutations)
-                print("Starting mutation sequence:")
-                best_of_the_best = []
-                for mut_prob in mut_probabilities_list:
-                    print(f"prob = {mut_prob:.5%}", end="\t")
-                    # TODO: revert changes for the final model
-                    em.create_mutations(prob=mut_prob)
-                    new_params = em.compare_mutations()
-                    if new_params is not None:
-                        print("Adding the best mutation to the final comparison list")
-                        best_of_the_best.append(new_params)
-                    else:
-                        print("Mutation unsuccessful, skipping.")
 
-                if len(best_of_the_best) > 1:
-                    print("Starting to compare best mutations:")
-                    best_params = em.compare_mutations(best_of_the_best)
-                    if best_params is not None:
-                        gen_imgs = generator(seed)
-                        save_image(gen_imgs.data[:36],
-                                   f"images/{UNIQUE_MODEL_NAME}/m{batches_done + mut_rep_ind}.png",
-                                   nrow=6, normalize=True)
-                        good_mut += 1
-                        print("Applying new params!")
-                        generator.load_state_dict(best_params)
-
-                        # make images before and after mutation
-                        z = Variable(Tensor(np.random.normal(
-                            0, 1, (imgs.shape[0], opt.latent_dim))))
-                        gen_imgs = generator(seed)
-                        save_image(gen_imgs.data[:36],
-                                   f"images/{UNIQUE_MODEL_NAME}/m{batches_done + 1 + mut_rep_ind}.png",
-                                   nrow=6, normalize=True)
-                    else:
-                        print("Mutation unsuccessful, keeping old params.")
-                elif len(best_of_the_best) == 1:
-                    print("Applying the only mutation which passed.")
-                    gen_imgs = generator(seed)
-                    save_image(gen_imgs.data[:36],
-                               f"images/{UNIQUE_MODEL_NAME}/m{batches_done + mut_rep_ind}.png",
-                               nrow=6, normalize=True)
-                    good_mut += 1
-                    generator.load_state_dict(best_of_the_best[0])
-
-                    # make images before and after mutation
-                    z = Variable(Tensor(np.random.normal(
-                        0, 1, (imgs.shape[0], opt.latent_dim))))
-                    gen_imgs = generator(seed)
-                    save_image(gen_imgs.data[:36],
-                               f"images/{UNIQUE_MODEL_NAME}/m{batches_done + 1 + mut_rep_ind}.png",
-                               nrow=6, normalize=True)
-                else:
-                    print("Mutation unsuccessful, keeping old params.")
-
-                # em.create_mutations(prob=opt.mutation_prob / (epoch + 1))
-                # new_params = em.compare_mutations()
-                # if new_params is not None:
-                #     good_mut += 1
-                #     print("Applying new params!")
-                #     generator.load_state_dict(new_params)
-                # else:
-                #     print("Mutation unsuccessful, keeping old params.")
 
         if batches_done % opt.sample_interval == 0:
-            gen_imgs = generator(seed)
-            save_image(gen_imgs.data[:36],
-                       f"images/{UNIQUE_MODEL_NAME}/{batches_done}.png",
-                       nrow=6, normalize=True)
-            print(f"[Epoch {epoch:d}/{opt.n_epochs}] "
-                  f"[Batch {i:d}/{len(dataloader):d}] "
-                  f"[D loss: {d_loss.item():.3f}] "
-                  f"[G loss: {g_loss.item():.3f}] "
-                  f"[Mutations success rate {good_mut:d}/{mut_counter:d}]")
+            self.save_image(generator)
+            self.print_stats()        
+
+        pass
+
+    def mutation_handler(self):
+        mut_counter += 1
+            em = Mutator(generator.state_dict(),
+                         discriminator.state_dict(),
+                         n_mut=opt.n_mutations)
+            print("Starting mutation sequence:")
+            best_of_the_best = []
+
+            # Generate and choose the best mutation for each probability 
+            for mut_prob in mut_probabilities_list:
+                print(f"prob = {mut_prob:.5%}", end="\t")
+                em.create_mutations(prob=mut_prob)
+                new_params = em.compare_mutations()
+                if new_params is not None:
+                    print("Adding the best mutation to the final comparison list")
+                    best_of_the_best.append(new_params)
+                else:
+                    print("Mutation unsuccessful, skipping.")
+
+            # Compare the best mutations and choose 'the best of the best'
+            if len(best_of_the_best) > 1:
+                print("Starting to compare best mutations:")
+                best_params = em.compare_mutations(best_of_the_best)
+                if best_params is not None:
+                    print("Applying new params!")
+                    good_mut += 1
+                    self.save_image(generator)
+                    generator.load_state_dict(best_params)
+                    self.save_image(generator)
+                else:
+                    print("Mutation unsuccessful, keeping old params.")
+            elif len(best_of_the_best) == 1:
+                print("Applying the only mutation which passed.")
+                good_mut += 1
+                self.save_image(generator)
+                generator.load_state_dict(best_of_the_best[0])
+                self.save_image(generator)
+            else:
+                print("Mutation unsuccessful, keeping old params.")
+
+
 
 make_animation(f"images/{UNIQUE_MODEL_NAME}/",
                f"images/{UNIQUE_MODEL_NAME}/animation.gif")
