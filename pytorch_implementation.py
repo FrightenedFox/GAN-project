@@ -1,6 +1,7 @@
 import os
 import glob
 import argparse
+from copy import deepcopy
 from datetime import datetime
 from collections import OrderedDict
 
@@ -19,7 +20,7 @@ from torchvision.utils import save_image
 from bit_operations import BitOps
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--n_epochs", type=int,     default=2, help="number of epochs of training")
+parser.add_argument("--n_epochs", type=int,     default=10, help="number of epochs of training")
 parser.add_argument("--batch_size", type=int,   default=64, help="size of the batches")
 parser.add_argument("--lr", type=float,         default=0.0002, help="adam: learning rate")
 parser.add_argument("--b1", type=float,         default=0.5, help="adam: decay of first order momentum of gradient")
@@ -31,7 +32,7 @@ parser.add_argument("--sample_interval", type=int, default=400, help="interval b
 parser.add_argument("--enable_mut", type=bool,  default=False, help="whether to generate mutations")
 parser.add_argument("--n_mut", type=int,        default=20, help="number of the mutations per parameter")
 parser.add_argument("--mut_prob", type=float,   default=0.02, help="probability of the mutation")
-parser.add_argument("--mut_interval", type=int, default=1000, help="interval between mutations")
+parser.add_argument("--mut_interval", type=int, default=3, help="interval between mutations")
 opt = parser.parse_args()
 print(opt)
 
@@ -40,8 +41,8 @@ IMG_CHANNELS = 1
 IMG_SHAPE = (IMG_CHANNELS, IMG_SIZE, IMG_SIZE)
 
 # 12345 seed is added for reproducibility
-rng = np.random.default_rng(12345)
-torch.manual_seed(12345)
+# TODO: add project seed multiplier so that we could generate different
+#       results if we want to do so
 
 
 def initialize_weights_for_tanh(model):
@@ -256,7 +257,9 @@ class ModelTraining:
         self.Tensor = torch.cuda.FloatTensor if self.cuda else torch.FloatTensor
 
         # Generate seed for consistent images
-        self.z_seed = Variable(self.Tensor(rng.normal(0, 1, (opt.batch_size, opt.latent_dim))))
+        # TODO: multiply 12345 by the "project seed multiplier"
+        self.rng = np.random.default_rng(12345)
+        self.z_seed = Variable(self.Tensor(self.rng.normal(0, 1, (opt.batch_size, opt.latent_dim))))
 
         # Initialize other training properties
         self.epoch = 0
@@ -269,6 +272,12 @@ class ModelTraining:
             "g_loss": [],
             "d_loss": [],
         }
+        # NOTE: consider making a list of specific values, not just a single one
+        self._return_specific_epoch_state = False
+        self._specific_epoch_state = 0
+        self._model_suffix = "n"
+        self._have_state_dicts = [self.generator, self.discriminator, self.optimizer_G, self.optimizer_D]
+        self._enable_comparison_sequence = False
 
     def train_epoch(self, imgs):
         # Adversarial ground truths
@@ -285,7 +294,7 @@ class ModelTraining:
         self.optimizer_G.zero_grad()
 
         # Sample noise as generator input
-        z = Variable(self.Tensor(rng.normal(0, 1, (imgs.shape[0], opt.latent_dim))))
+        z = Variable(self.Tensor(self.rng.normal(0, 1, (imgs.shape[0], opt.latent_dim))))
 
         # Generate a batch of images
         gen_imgs = self.generator(z)
@@ -311,6 +320,7 @@ class ModelTraining:
         self.optimizer_D.step()
 
     def trainer(self):
+        specific_epoch_state = None
         # Configure data loader
         dataloader = torch.utils.data.DataLoader(
             datasets.MNIST(
@@ -328,28 +338,40 @@ class ModelTraining:
         )
 
         # Start training
-        for self.epoch in range(opt.n_epochs):
+        while self.epoch < opt.n_epochs:
+            self.epoch += 1
             for i, (imgs, _) in enumerate(dataloader):
-                self.batches_done = self.epoch * len(dataloader) + i
+                self.batches_done = (self.epoch - 1) * len(dataloader) + i
                 self.train_epoch(imgs)
                 self.collect_stats()
-
-                if self.batches_done % opt.mut_interval == 0 and self.batches_done != 0 and opt.enable_mut:
-                    self.mutation_handler()
 
                 if self.batches_done % opt.sample_interval == 0:
                     self.save_image()
                     self.print_stats(len(dataloader))
 
+            if self.epoch % opt.mut_interval == 0 and self.epoch != 0:
+                if self._enable_comparison_sequence:
+                    self.rng = np.random.default_rng(self.epoch)
+                    torch.manual_seed(self.epoch)
+                if opt.enable_mut:
+                    self.mutation_handler()
+
+            if self._return_specific_epoch_state and self.epoch == self._specific_epoch_state:
+                specific_epoch_state = [deepcopy(m.state_dict()) for m in self._have_state_dicts]
+
             if self.SAVE_STATE_DICT_AFTER_EACH_EPOCH:
-                self.save_model_state([self.generator, self.discriminator,
-                                       self.optimizer_G, self.optimizer_D],
+                self.save_model_state(self._have_state_dicts,
                                       [f"gen_ep{self.epoch}", f"disc_ep{self.epoch}",
                                        f"optimG_ep{self.epoch}", f"optimD_ep{self.epoch}"])
+        return specific_epoch_state
 
-    def mutation_handler(self):
+    def mutation_handler(self, old_gen_state_dict=None, disc_state_dict=None):
         self.mut_counter += 1
-        em = Mutator(self.generator.state_dict(), self.discriminator.state_dict(), n_mut=opt.n_mut)
+        if old_gen_state_dict is None:
+            old_gen_state_dict = self.generator.state_dict()
+        if disc_state_dict is None:
+            disc_state_dict = self.discriminator.state_dict()
+        em = Mutator(old_gen_state_dict, disc_state_dict, n_mut=opt.n_mut)
         print("Starting mutation sequence:")
         best_of_the_best = []
 
@@ -371,24 +393,27 @@ class ModelTraining:
             if best_params is not None:
                 print("Applying new params!")
                 self.good_mut += 1
-                self.save_image()
-                self.generator.load_state_dict(best_params)
-                self.save_image()
+                return best_params
             else:
                 print("Mutation unsuccessful, keeping old params.")
         elif len(best_of_the_best) == 1:
             print("Applying the only mutation which passed.")
             self.good_mut += 1
-            self.save_image()
-            self.generator.load_state_dict(best_of_the_best[0])
-            self.save_image()
+            return best_of_the_best[0]
         else:
             print("Mutation unsuccessful, keeping old params.")
+            return None
 
-    def save_image(self, subfolder="samples"):
+    def apply_mutation(self, new_state_dict):
+        self.save_image("b")
+        self.generator.load_state_dict(new_state_dict)
+        self.save_image("a")
+
+    def save_image(self, prefix=""):
         gen_imgs = self.generator(self.z_seed)
         save_image(gen_imgs.data[:36],
-                   f"images/{self.unique_model_name}/{subfolder}/{self.batches_done}.png",
+                   f"images/{self.unique_model_name}/samples/"
+                   f"{prefix}{self.batches_done}_{self._model_suffix}.png",
                    nrow=6,
                    normalize=True)
 
@@ -403,7 +428,7 @@ class ModelTraining:
         self.stats["d_loss"].append(self.d_loss.item())
         self.stats["g_loss"].append(self.g_loss.item())
 
-    def plot_stats(self, smoothing=40):
+    def plot_stats(self, smoothing=40, filename="plot"):
         plt.style.use("ggplot")
         smoothed_stats_df = pd.DataFrame(self.stats).rolling(smoothing, center=True).mean()
 
@@ -415,7 +440,7 @@ class ModelTraining:
         ax.set_ylabel("Loss")
         ax.set_xlabel("Batch")
 
-        plt.savefig(f"images/{mt.unique_model_name}/media/plot.png", dpi=300)
+        plt.savefig(f"images/{mt.unique_model_name}/media/{filename}.png", dpi=300)
 
     def make_animation(self, filename="animation"):
         output_file = f"images/{self.unique_model_name}/media/{filename}.gif"
@@ -427,9 +452,9 @@ class ModelTraining:
                 image = imageio.imread(filename)
                 writer.append_data(image)
 
-    def save_stats(self):
+    def save_stats(self, filename="stats"):
         stats_df = pd.DataFrame(self.stats)
-        stats_df.to_json(f"images/{self.unique_model_name}/logs/stats.json")
+        stats_df.to_json(f"images/{self.unique_model_name}/logs/{filename}.json")
         del stats_df
 
     def save_model_training_info(self):
@@ -440,13 +465,40 @@ class ModelTraining:
         for model, filename in zip(models, filenames):
             torch.save(model.state_dict(), f"images/{self.unique_model_name}/models/{filename}.pth")
 
-    def comparison_sequence(self):
-        pass
+    def comparison_sequence(self, compare_mutations=True):
+        self._enable_comparison_sequence = True
+        self._return_specific_epoch_state = True
+        # TODO: raise exception if mutations are enabled
+        key_epochs = list(range(opt.mut_interval, opt.n_epochs + 1, opt.mut_interval))
+
+        for epoch_num in key_epochs:
+            print(f"{10 * '-'} Starting a new sequence {10 * '-'}")
+            self._specific_epoch_state = epoch_num
+            self._model_suffix = str(epoch_num)
+
+            # Train and save all stats
+            states_from_i = mt.trainer()
+            mt.plot_stats(filename=f"plot_{epoch_num}")
+            mt.save_stats(filename=f"stats_{epoch_num}")
+            self.save_model_state(self._have_state_dicts,
+                                  [f"gen_finish{epoch_num}", f"disc_finish{epoch_num}",
+                                   f"optimG_finish{epoch_num}", f"optimD_finish{epoch_num}"])
+
+            if compare_mutations:
+                mutated_gen_state_dict = self.mutation_handler(old_gen_state_dict=states_from_i[0],
+                                                               disc_state_dict=states_from_i[1])
+                if mutated_gen_state_dict is not None:
+                    states_from_i[0] = mutated_gen_state_dict
+
+            # Prepare for the next training
+            for m, state in zip(self._have_state_dicts, states_from_i):
+                m.load_state_dict(state)
+            self.rng = np.random.default_rng(epoch_num)
+            torch.manual_seed(epoch_num)
+            self.epoch = epoch_num
+            self.stats["g_loss"], self.stats["d_loss"] = [], []
 
 
 if __name__ == "__main__":
     mt = ModelTraining()
-    mt.trainer()
-    mt.plot_stats()
-    mt.make_animation()
-    mt.save_stats()
+    mt.comparison_sequence()
