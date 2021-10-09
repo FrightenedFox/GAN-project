@@ -1,6 +1,8 @@
 import os
 import glob
+import logging
 import argparse
+from sys import stdout
 from copy import deepcopy
 from datetime import datetime
 from collections import OrderedDict
@@ -19,8 +21,14 @@ from torchvision.utils import save_image
 
 from bit_operations import BitOps
 
+# Setup logging so that messages are printed to both stdout and logfile
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+stdout_handler = logging.StreamHandler(stdout)
+logger.addHandler(stdout_handler)
+
 parser = argparse.ArgumentParser()
-parser.add_argument("--n_epochs", type=int,     default=10, help="number of epochs of training")
+parser.add_argument("--n_epochs", type=int,     default=30, help="number of epochs of training")
 parser.add_argument("--batch_size", type=int,   default=64, help="size of the batches")
 parser.add_argument("--lr", type=float,         default=0.0002, help="adam: learning rate")
 parser.add_argument("--b1", type=float,         default=0.5, help="adam: decay of first order momentum of gradient")
@@ -30,19 +38,16 @@ parser.add_argument("--latent_dim", type=int,   default=100, help="dimensionalit
 parser.add_argument("--sample_interval", type=int, default=400, help="interval between image samples")
 
 parser.add_argument("--enable_mut", type=bool,  default=False, help="whether to generate mutations")
-parser.add_argument("--n_mut", type=int,        default=20, help="number of the mutations per parameter")
+parser.add_argument("--n_mut", type=int,        default=30, help="number of the mutations per parameter")
 parser.add_argument("--mut_prob", type=float,   default=0.02, help="probability of the mutation")
 parser.add_argument("--mut_interval", type=int, default=3, help="interval between mutations")
 opt = parser.parse_args()
-print(opt)
+logger.info(opt)
 
 IMG_SIZE = 28
 IMG_CHANNELS = 1
 IMG_SHAPE = (IMG_CHANNELS, IMG_SIZE, IMG_SIZE)
-
-# 12345 seed is added for reproducibility
-# TODO: add project seed multiplier so that we could generate different
-#       results if we want to do so
+MODEL_SEED = 12345
 
 
 def initialize_weights_for_tanh(model):
@@ -188,7 +193,7 @@ class Mutator:
         min_ind = np.argmin(mut_res)
         to_print = np.copy(mut_res)
         to_print.sort()
-        print(f"\nCurrent loss {curr_loss.numpy():.4f}\nBest mutations:", to_print[:6])
+        logger.info(f"\nCurrent loss {curr_loss.numpy():.4f}\nBest mutations: {to_print[:6]}")
         if mut_res[min_ind] < curr_loss.numpy():
             return self.params2device(mutated_params[int(min_ind)], out_device="cuda:0" if self.on_gpu else "cpu")
         return None
@@ -232,6 +237,12 @@ class ModelTraining:
         os.makedirs(f"images/{self.unique_model_name}/samples/", exist_ok=True)
         os.makedirs(f"images/{self.unique_model_name}/logs/", exist_ok=True)
         os.makedirs(f"images/{self.unique_model_name}/models/", exist_ok=True)
+        output_file_handler = logging.FileHandler(f"images/{self.unique_model_name}/logs/output.log")
+        logger.addHandler(output_file_handler)
+
+        # Consistent seeds for reproducibility
+        self.rng = np.random.default_rng(MODEL_SEED)
+        torch.manual_seed(MODEL_SEED)
 
         # Loss function
         self.adversarial_loss = torch.nn.BCELoss()
@@ -248,7 +259,7 @@ class ModelTraining:
 
         # Handling training on GPU
         self.cuda = True if torch.cuda.is_available() else False
-        print("Is cuda enabled?", "YES" if self.cuda else "NO")
+        logger.info(f"Is cuda enabled? {'YES' if self.cuda else 'NO'}")
         if self.cuda:
             self.generator.cuda()
             self.discriminator.cuda()
@@ -257,8 +268,6 @@ class ModelTraining:
         self.Tensor = torch.cuda.FloatTensor if self.cuda else torch.FloatTensor
 
         # Generate seed for consistent images
-        # TODO: multiply 12345 by the "project seed multiplier"
-        self.rng = np.random.default_rng(12345)
         self.z_seed = Variable(self.Tensor(self.rng.normal(0, 1, (opt.batch_size, opt.latent_dim))))
 
         # Initialize other training properties
@@ -320,7 +329,6 @@ class ModelTraining:
         self.optimizer_D.step()
 
     def trainer(self):
-        specific_epoch_state = None
         # Configure data loader
         dataloader = torch.utils.data.DataLoader(
             datasets.MNIST(
@@ -338,12 +346,13 @@ class ModelTraining:
         )
 
         # Start training
+        specific_epoch_state = None
         while self.epoch < opt.n_epochs:
             self.epoch += 1
             for i, (imgs, _) in enumerate(dataloader):
-                self.batches_done = (self.epoch - 1) * len(dataloader) + i
                 self.train_epoch(imgs)
                 self.collect_stats()
+                self.batches_done = (self.epoch - 1) * len(dataloader) + i
 
                 if self.batches_done % opt.sample_interval == 0:
                     self.save_image()
@@ -351,8 +360,8 @@ class ModelTraining:
 
             if self.epoch % opt.mut_interval == 0 and self.epoch != 0:
                 if self._enable_comparison_sequence:
-                    self.rng = np.random.default_rng(self.epoch)
-                    torch.manual_seed(self.epoch)
+                    self.rng = np.random.default_rng(self.epoch * MODEL_SEED)
+                    torch.manual_seed(self.epoch * MODEL_SEED)
                 if opt.enable_mut:
                     self.mutation_handler()
 
@@ -372,36 +381,36 @@ class ModelTraining:
         if disc_state_dict is None:
             disc_state_dict = self.discriminator.state_dict()
         em = Mutator(old_gen_state_dict, disc_state_dict, n_mut=opt.n_mut)
-        print("Starting mutation sequence:")
+        logger.info("Starting mutation sequence:")
         best_of_the_best = []
 
         # Generate and choose the best mutation for each probability
         for mut_prob in self.mut_probabilities_list:
-            print(f"prob = {mut_prob:.5%}", end="\t")
+            logger.info(f"prob = {mut_prob:.5%}\t")
             em.create_mutations(prob=mut_prob)
             new_params = em.compare_mutations()
             if new_params is not None:
-                print("Adding the best mutation to the final comparison list")
+                logger.info("Adding the best mutation to the final comparison list")
                 best_of_the_best.append(new_params)
             else:
-                print("Mutation unsuccessful, skipping.")
+                logger.info("Mutation unsuccessful, skipping.")
 
         # Compare the best mutations and choose 'the best of the best'
         if len(best_of_the_best) > 1:
-            print("Starting to compare best mutations:")
+            logger.info("Starting to compare best mutations:")
             best_params = em.compare_mutations(best_of_the_best)
             if best_params is not None:
-                print("Applying new params!")
+                logger.info("Applying new params!")
                 self.good_mut += 1
                 return best_params
             else:
-                print("Mutation unsuccessful, keeping old params.")
+                logger.info("Mutation unsuccessful, keeping old params.")
         elif len(best_of_the_best) == 1:
-            print("Applying the only mutation which passed.")
+            logger.info("Applying the only mutation which passed.")
             self.good_mut += 1
             return best_of_the_best[0]
         else:
-            print("Mutation unsuccessful, keeping old params.")
+            logger.info("Mutation unsuccessful, keeping old params.")
             return None
 
     def apply_mutation(self, new_state_dict):
@@ -418,11 +427,11 @@ class ModelTraining:
                    normalize=True)
 
     def print_stats(self, dataloader_length):
-        print(f"[Epoch {self.epoch:d}/{opt.n_epochs}] "
-              f"[Batch {self.batches_done:d}/{opt.n_epochs * dataloader_length:d}] "
-              f"[D loss: {self.d_loss.item():.3f}] "
-              f"[G loss: {self.g_loss.item():.3f}] "
-              f"[Mutations success rate {self.good_mut:d}/{self.mut_counter:d}]")
+        logger.info(f"[Epoch {self.epoch:d}/{opt.n_epochs}] "
+                    f"[Batch {self.batches_done:d}/{opt.n_epochs * dataloader_length:d}] "
+                    f"[D loss: {self.d_loss.item():.3f}] "
+                    f"[G loss: {self.g_loss.item():.3f}] "
+                    f"[Mutations success rate {self.good_mut:d}/{self.mut_counter:d}]")
 
     def collect_stats(self):
         self.stats["d_loss"].append(self.d_loss.item())
@@ -472,7 +481,7 @@ class ModelTraining:
         key_epochs = list(range(opt.mut_interval, opt.n_epochs + 1, opt.mut_interval))
 
         for epoch_num in key_epochs:
-            print(f"{10 * '-'} Starting a new sequence {10 * '-'}")
+            logger.info(f"{10 * '-'} Starting a new sequence {10 * '-'}")
             self._specific_epoch_state = epoch_num
             self._model_suffix = str(epoch_num)
 
@@ -493,12 +502,19 @@ class ModelTraining:
             # Prepare for the next training
             for m, state in zip(self._have_state_dicts, states_from_i):
                 m.load_state_dict(state)
-            self.rng = np.random.default_rng(epoch_num)
-            torch.manual_seed(epoch_num)
+            self.rng = np.random.default_rng(epoch_num * MODEL_SEED)
+            torch.manual_seed(epoch_num * MODEL_SEED)
             self.epoch = epoch_num
             self.stats["g_loss"], self.stats["d_loss"] = [], []
 
 
 if __name__ == "__main__":
+    make_comparison = False
     mt = ModelTraining()
-    mt.comparison_sequence()
+    if make_comparison:
+        mt.comparison_sequence()
+    else:
+        mt.trainer()
+        mt.plot_stats()
+        mt.make_animation()
+        mt.save_stats()
