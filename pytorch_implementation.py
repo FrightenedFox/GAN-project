@@ -267,9 +267,6 @@ class ModelTraining:
 
         self.Tensor = torch.cuda.FloatTensor if self.cuda else torch.FloatTensor
 
-        # Generate seed for consistent images
-        self.z_seed = Variable(self.Tensor(self.rng.normal(0, 1, (opt.batch_size, opt.latent_dim))))
-
         # Initialize other training properties
         self.epoch = 0
         self.batches_done = 0
@@ -277,6 +274,10 @@ class ModelTraining:
         self.mut_counter = 0
         self.g_loss = None
         self.d_loss = None
+        self.sample_scaling = 2
+        self.images_per_sample = 36
+        self.rows_per_sample = 6
+        self.number_of_final_show_off_samples = 5
         self.stats = {
             "g_loss": [],
             "d_loss": [],
@@ -287,6 +288,13 @@ class ModelTraining:
         self._model_suffix = "n"
         self._have_state_dicts = [self.generator, self.discriminator, self.optimizer_G, self.optimizer_D]
         self._enable_comparison_sequence = False
+
+        # Generate seed for consistent images
+        self.z_seed = Variable(self.Tensor(self.rng.normal(0, 1, (self.images_per_sample, opt.latent_dim))))
+        self.final_show_off_z_seeds = [
+            Variable(self.Tensor(self.rng.normal(0, 1, (self.images_per_sample, opt.latent_dim))))
+            for _ in range(self.number_of_final_show_off_samples)
+        ]
 
     def train_epoch(self, imgs):
         # Adversarial ground truths
@@ -418,12 +426,15 @@ class ModelTraining:
         self.generator.load_state_dict(new_state_dict)
         self.save_image("a")
 
-    def save_image(self, prefix=""):
-        gen_imgs = self.generator(self.z_seed)
-        save_image(gen_imgs.data[:36],
+    def save_image(self, prefix="", z_seed=None):
+        if z_seed is None:
+            z_seed = self.z_seed
+        gen_imgs = self.generator(z_seed)
+        scaled_imgs = transforms.Resize(size=gen_imgs.shape[0] * self.sample_scaling)(gen_imgs)
+        save_image(scaled_imgs,
                    f"images/{self.unique_model_name}/samples/"
                    f"{prefix}{self.batches_done}_{self._model_suffix}.png",
-                   nrow=6,
+                   nrow=self.rows_per_sample,
                    normalize=True)
 
     def print_stats(self, dataloader_length):
@@ -474,6 +485,10 @@ class ModelTraining:
         for model, filename in zip(models, filenames):
             torch.save(model.state_dict(), f"images/{self.unique_model_name}/models/{filename}.pth")
 
+    def final_result_show_off(self, prefix=""):
+        for i, fz_seed in enumerate(self.final_show_off_z_seeds):
+            self.save_image(prefix=f"{prefix}final_zID{i+1}_", z_seed=fz_seed)
+
     def comparison_sequence(self, compare_mutations=True):
         self._enable_comparison_sequence = True
         self._return_specific_epoch_state = True
@@ -489,6 +504,7 @@ class ModelTraining:
             states_from_i = mt.trainer()
             mt.plot_stats(filename=f"plot_{epoch_num}")
             mt.save_stats(filename=f"stats_{epoch_num}")
+            mt.final_result_show_off()
             self.save_model_state(self._have_state_dicts,
                                   [f"gen_finish{epoch_num}", f"disc_finish{epoch_num}",
                                    f"optimG_finish{epoch_num}", f"optimD_finish{epoch_num}"])
@@ -518,3 +534,4 @@ if __name__ == "__main__":
         mt.plot_stats()
         mt.make_animation()
         mt.save_stats()
+        mt.final_result_show_off()
