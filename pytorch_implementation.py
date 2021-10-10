@@ -21,6 +21,11 @@ from torchvision.utils import save_image
 
 from bit_operations import BitOps
 
+IMG_SIZE = 28
+IMG_CHANNELS = 1
+IMG_SHAPE = (IMG_CHANNELS, IMG_SIZE, IMG_SIZE)
+MODEL_SEED = 12345
+
 # Setup logging so that messages are printed to both stdout and logfile
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -28,7 +33,7 @@ stdout_handler = logging.StreamHandler(stdout)
 logger.addHandler(stdout_handler)
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--n_epochs", type=int,     default=30, help="number of epochs of training")
+parser.add_argument("--n_epochs", type=int,     default=80, help="number of epochs of training")
 parser.add_argument("--batch_size", type=int,   default=64, help="size of the batches")
 parser.add_argument("--lr", type=float,         default=0.0002, help="adam: learning rate")
 parser.add_argument("--b1", type=float,         default=0.5, help="adam: decay of first order momentum of gradient")
@@ -39,18 +44,13 @@ parser.add_argument("--sample_interval", type=int, default=400, help="interval b
 
 parser.add_argument("--enable_mut", type=bool,  default=False, help="whether to generate mutations")
 parser.add_argument("--n_mut", type=int,        default=30, help="number of the mutations per parameter")
-parser.add_argument("--mut_prob", type=float,   default=0.02, help="probability of the mutation")
-parser.add_argument("--mut_interval", type=int, default=3, help="interval between mutations")
+parser.add_argument("--mut_interval", type=int, default=4, help="interval between mutations")
 opt = parser.parse_args()
 logger.info(opt)
 
-IMG_SIZE = 28
-IMG_CHANNELS = 1
-IMG_SHAPE = (IMG_CHANNELS, IMG_SIZE, IMG_SIZE)
-MODEL_SEED = 12345
-
 
 def initialize_weights_for_tanh(model):
+    """Initializes model parameters using xavier uniform distribution"""
     if isinstance(model, nn.Linear):
         nn.init.xavier_uniform_(model.weight.data)
         nn.init.constant_(model.bias.data, 0)
@@ -60,6 +60,7 @@ def initialize_weights_for_tanh(model):
 
 
 def initialize_weights_for_sigmoid(model):
+    """Initializes model parameters using xavier normal distribution"""
     if isinstance(model, nn.Linear):
         nn.init.xavier_normal_(model.weight.data)
         nn.init.constant_(model.bias.data, 0)
@@ -227,18 +228,17 @@ class ModelTraining:
 
     def __init__(self):
         # Folders and files naming handling
-        model_name_suffix = (f"_m{opt.enable_mut}"
-                             f"_ep{opt.n_epochs}_bs{opt.batch_size}"
-                             f"_nm{opt.n_mut}_mp{opt.mut_prob}"
-                             f"_mi{opt.mut_interval}")
-        self.unique_model_name = f"PyTorch_t{datetime.now().strftime('%m%d_%H%M%S')}{model_name_suffix}"
+        self.unique_model_name = f"PyTorch_t{datetime.now().strftime('%m%d_%H%M%S')}"
         os.makedirs(f"images/{self.unique_model_name}/", exist_ok=True)
         os.makedirs(f"images/{self.unique_model_name}/media/", exist_ok=True)
         os.makedirs(f"images/{self.unique_model_name}/samples/", exist_ok=True)
         os.makedirs(f"images/{self.unique_model_name}/logs/", exist_ok=True)
         os.makedirs(f"images/{self.unique_model_name}/models/", exist_ok=True)
+
+        # Start logging
         output_file_handler = logging.FileHandler(f"images/{self.unique_model_name}/logs/output.log")
         logger.addHandler(output_file_handler)
+        self.save_model_training_info()
 
         # Consistent seeds for reproducibility
         self.rng = np.random.default_rng(MODEL_SEED)
@@ -279,10 +279,11 @@ class ModelTraining:
         self.rows_per_sample = 6
         self.number_of_final_show_off_samples = 5
         self.stats = {
+            "time":   [],
+            "batch":  [],
             "g_loss": [],
             "d_loss": [],
         }
-        # NOTE: consider making a list of specific values, not just a single one
         self._return_specific_epoch_state = False
         self._specific_epoch_state = 0
         self._model_suffix = "n"
@@ -359,8 +360,8 @@ class ModelTraining:
             self.epoch += 1
             for i, (imgs, _) in enumerate(dataloader):
                 self.train_epoch(imgs)
-                self.collect_stats()
                 self.batches_done = (self.epoch - 1) * len(dataloader) + i
+                self.collect_stats()
 
                 if self.batches_done % opt.sample_interval == 0:
                     self.save_image()
@@ -371,7 +372,9 @@ class ModelTraining:
                     self.rng = np.random.default_rng(self.epoch * MODEL_SEED)
                     torch.manual_seed(self.epoch * MODEL_SEED)
                 if opt.enable_mut:
-                    self.mutation_handler()
+                    mutated_gen_state_dict = self.mutation_handler()
+                    if mutated_gen_state_dict is not None:
+                        self.apply_mutation(mutated_gen_state_dict)
 
             if self._return_specific_epoch_state and self.epoch == self._specific_epoch_state:
                 specific_epoch_state = [deepcopy(m.state_dict()) for m in self._have_state_dicts]
@@ -445,12 +448,15 @@ class ModelTraining:
                     f"[Mutations success rate {self.good_mut:d}/{self.mut_counter:d}]")
 
     def collect_stats(self):
+        self.stats["time"].append(datetime.now())
+        self.stats["batch"].append(self.batches_done)
         self.stats["d_loss"].append(self.d_loss.item())
         self.stats["g_loss"].append(self.g_loss.item())
 
     def plot_stats(self, smoothing=40, filename="plot"):
         plt.style.use("ggplot")
-        smoothed_stats_df = pd.DataFrame(self.stats).rolling(smoothing, center=True).mean()
+        stats_df = pd.DataFrame(self.stats)
+        smoothed_stats_df = stats_df[["d_loss", "g_loss"]].rolling(smoothing, center=True).mean()
 
         fig, ax = plt.subplots()
         ax.plot(smoothed_stats_df.g_loss, label="Generator")
@@ -475,11 +481,13 @@ class ModelTraining:
     def save_stats(self, filename="stats"):
         stats_df = pd.DataFrame(self.stats)
         stats_df.to_json(f"images/{self.unique_model_name}/logs/{filename}.json")
-        del stats_df
 
     def save_model_training_info(self):
-        # TODO: make model info file
-        pass
+        mes = (f"Start time:{datetime.now()}; model seed:{MODEL_SEED}; epochs:{opt.n_epochs}; "
+               f"batch size:{opt.batch_size}; comparison sequence:{self._enable_comparison_sequence};\n"
+               f"mutations:{opt.enable_mut}; mutations interval:{opt.mut_interval}; "
+               f"number of mutations:{opt.n_mut}; probabilities:{mut_probabilities_list};\n")
+        logger.info(mes)
 
     def save_model_state(self, models, filenames):
         for model, filename in zip(models, filenames):
@@ -490,9 +498,11 @@ class ModelTraining:
             self.save_image(prefix=f"{prefix}final_zID{i+1}_", z_seed=fz_seed)
 
     def comparison_sequence(self, compare_mutations=True):
+        if opt.enable_mut:  # Comparison won't make any sense if mutations are enabled
+            raise RuntimeError("Comparison sequence can't be executed when 'enable_mut' parameter is True.")
+
         self._enable_comparison_sequence = True
         self._return_specific_epoch_state = True
-        # TODO: raise exception if mutations are enabled
         key_epochs = list(range(opt.mut_interval, opt.n_epochs + 1, opt.mut_interval))
 
         for epoch_num in key_epochs:
@@ -521,11 +531,12 @@ class ModelTraining:
             self.rng = np.random.default_rng(epoch_num * MODEL_SEED)
             torch.manual_seed(epoch_num * MODEL_SEED)
             self.epoch = epoch_num
-            self.stats["g_loss"], self.stats["d_loss"] = [], []
+            for stats_key in ["time", "batch", "g_loss", "d_loss"]:
+                self.stats[stats_key] = []
 
 
 if __name__ == "__main__":
-    make_comparison = False
+    make_comparison = True
     mt = ModelTraining()
     if make_comparison:
         mt.comparison_sequence()
