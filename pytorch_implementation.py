@@ -503,7 +503,7 @@ class ModelTraining:
         ax.set_ylabel("Loss")
         ax.set_xlabel("Batch")
 
-        plt.savefig(f"images/{mt.unique_model_name}/media/{filename}.png", dpi=300)
+        plt.savefig(f"images/{self.unique_model_name}/media/{filename}.png", dpi=300)
 
     def make_animation(self, filename="animation"):
         output_file = f"images/{self.unique_model_name}/media/{filename}.gif"
@@ -523,7 +523,7 @@ class ModelTraining:
         mes = (f"Start time:{datetime.now()}; model seed:{MODEL_SEED}; epochs:{opt.n_epochs}; "
                f"batch size:{opt.batch_size}; comparison sequence:{self._enable_comparison_sequence};\n"
                f"mutations:{opt.enable_mut}; mutations interval:{opt.mut_interval}; "
-               f"number of mutations:{opt.n_mut}; probabilities:{mut_probabilities_list};\n")
+               f"number of mutations:{opt.n_mut}; probabilities:{self.mut_probabilities_list};\n")
         logger.info(mes)
 
     def save_model_state(self, models, filenames):
@@ -548,10 +548,10 @@ class ModelTraining:
             self._model_suffix = str(epoch_num)
 
             # Train and save all stats
-            states_from_i = mt.trainer()
-            mt.plot_stats(filename=f"plot_{epoch_num}")
-            mt.save_stats(filename=f"stats_{epoch_num}")
-            mt.final_result_show_off()
+            states_from_i = self.trainer()
+            self.plot_stats(filename=f"plot_{epoch_num}")
+            self.save_stats(filename=f"stats_{epoch_num}")
+            self.final_result_show_off()
             self.save_model_state(self._have_state_dicts,
                                   [f"gen_finish{epoch_num}", f"disc_finish{epoch_num}",
                                    f"optimG_finish{epoch_num}", f"optimD_finish{epoch_num}"])
@@ -589,5 +589,5 @@ if __name__ == "__main__":
         gen_v1_dict=torch.load(f"{dir_path}gen_finish4.pth"),
         disc_v2_dict=torch.load(f"{dir_path}disc_finish80.pth"),
         gen_v2_dict=torch.load(f"{dir_path}gen_finish80.pth"),
-        n_batches=20,
+        n_batches=1000,
     )
