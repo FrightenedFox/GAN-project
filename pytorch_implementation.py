@@ -69,6 +69,44 @@ def initialize_weights_for_sigmoid(model):
         nn.init.constant_(model.bias.data, 0)
 
 
+def x_cross_comparison(disc_v1_dict, gen_v1_dict,
+                       disc_v2_dict, gen_v2_dict,
+                       comparison_seed=MODEL_SEED,
+                       batch_size=opt.batch_size,
+                       n_batches=5):
+    rng = np.random.default_rng(comparison_seed)
+
+    gen_v1 = Generator()
+    gen_v2 = Generator()
+    disc_v1 = Discriminator()
+    disc_v2 = Discriminator()
+    gen_v1.load_state_dict(gen_v1_dict)
+    gen_v2.load_state_dict(gen_v2_dict)
+    disc_v1.load_state_dict(disc_v1_dict)
+    disc_v2.load_state_dict(disc_v2_dict)
+    adversarial_loss = torch.nn.BCELoss()
+    cuda = True if torch.cuda.is_available() else False
+    if cuda:
+        gen_v1.cuda()
+        gen_v2.cuda()
+        disc_v1.cuda()
+        disc_v2.cuda()
+        adversarial_loss.cuda()
+    Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
+    valid = Variable(Tensor(batch_size, 1).fill_(1.0), requires_grad=False)
+
+    g1_losses, g2_losses = [], []
+    for _ in range(n_batches):
+        z = Variable(Tensor(rng.normal(0, 1, (batch_size, opt.latent_dim))))
+        gen_imgs_v1 = gen_v1(z)
+        gen_imgs_v2 = gen_v2(z)
+        g1_losses.append(adversarial_loss(disc_v2(gen_imgs_v1), valid).item())
+        g2_losses.append(adversarial_loss(disc_v1(gen_imgs_v2), valid).item())
+
+    logger.info(f"G1 vs D2 mean = {np.mean(g1_losses)}\n\tG1 vs D2 losses: {g1_losses}.")
+    logger.info(f"G2 vs D1 mean = {np.mean(g2_losses)}\n\tG2 vs D1 losses: {g2_losses}.")
+
+
 class Generator(nn.Module):
     def __init__(self):
         super(Generator, self).__init__()
@@ -221,7 +259,6 @@ class Mutator:
         return out_params
 
 
-# noinspection PyUnresolvedReferences
 class ModelTraining:
     SAVE_STATE_DICT_AFTER_EACH_EPOCH = False
     mut_probabilities_list = [0.0005, 0.0002, 0.0001, 0.00005, 0.00002, 0.00001]
@@ -480,7 +517,7 @@ class ModelTraining:
 
     def save_stats(self, filename="stats"):
         stats_df = pd.DataFrame(self.stats)
-        stats_df.to_json(f"images/{self.unique_model_name}/logs/{filename}.json")
+        stats_df.to_csv(f"images/{self.unique_model_name}/logs/{filename}.csv", index=False)
 
     def save_model_training_info(self):
         mes = (f"Start time:{datetime.now()}; model seed:{MODEL_SEED}; epochs:{opt.n_epochs}; "
@@ -536,13 +573,21 @@ class ModelTraining:
 
 
 if __name__ == "__main__":
-    make_comparison = True
-    mt = ModelTraining()
-    if make_comparison:
-        mt.comparison_sequence()
-    else:
-        mt.trainer()
-        mt.plot_stats()
-        mt.make_animation()
-        mt.save_stats()
-        mt.final_result_show_off()
+    # make_comparison = True
+    # mt = ModelTraining()
+    # if make_comparison:
+    #     mt.comparison_sequence()
+    # else:
+    #     mt.trainer()
+    #     mt.plot_stats()
+    #     mt.make_animation()
+    #     mt.save_stats()
+    #     mt.final_result_show_off()
+    dir_path = "images\\PyTorch_t1010_100858_mFalse_ep80_bs64_nm30_mp0.02_mi4\\models\\"
+    x_cross_comparison(
+        disc_v1_dict=torch.load(f"{dir_path}disc_finish4.pth"),
+        gen_v1_dict=torch.load(f"{dir_path}gen_finish4.pth"),
+        disc_v2_dict=torch.load(f"{dir_path}disc_finish80.pth"),
+        gen_v2_dict=torch.load(f"{dir_path}gen_finish80.pth"),
+        n_batches=20,
+    )
