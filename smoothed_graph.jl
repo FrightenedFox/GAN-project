@@ -26,7 +26,7 @@ end
 fig_filename = "plot.png"
 
 # ╔═╡ ab786cc6-5d48-49e5-a148-0982684a5361
-folder = "images\\PyTorch_t1010_100858_mFalse_ep80_bs64_nm30_mp0.02_mi4\\logs\\"
+folder = "images\\PyTorch_t1010_100858_important_version\\logs\\"
 
 # ╔═╡ 456d5444-5818-433d-9f66-93e0099187ca
 files = ["stats_$(i).csv" for i in 4:4:80]
@@ -1272,11 +1272,11 @@ version = "0.9.1+5"
 # ╟─e16f8df7-7a88-403b-8d3f-9f073e5b4414
 # ╟─ab786cc6-5d48-49e5-a148-0982684a5361
 # ╟─456d5444-5818-433d-9f66-93e0099187ca
-# ╟─a06051eb-e230-4e3b-b543-210349d8f9f0
-# ╟─d0870429-204f-451e-b15e-9f5cbd5e676b
+# ╠═a06051eb-e230-4e3b-b543-210349d8f9f0
+# ╠═d0870429-204f-451e-b15e-9f5cbd5e676b
 # ╠═ddb0353f-a874-40e3-8e66-3c1a141749a0
 # ╟─81882f0c-925c-4e17-b36f-61b922eff4b0
 # ╠═277d0b19-ab8b-4fd6-8338-c08b76930e1f
-# ╟─6dc6b62f-e74e-434c-ace2-79a6252794ca
+# ╠═6dc6b62f-e74e-434c-ace2-79a6252794ca
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
