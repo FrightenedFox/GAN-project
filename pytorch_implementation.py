@@ -73,38 +73,56 @@ def x_cross_comparison(disc_v1_dict, gen_v1_dict,
                        disc_v2_dict, gen_v2_dict,
                        comparison_seed=MODEL_SEED,
                        batch_size=opt.batch_size,
-                       n_batches=5):
-    rng = np.random.default_rng(comparison_seed)
+                       n_batches=5, n_epochs=20):
+    # rng = np.random.default_rng(comparison_seed)
 
-    gen_v1 = Generator()
-    gen_v2 = Generator()
-    disc_v1 = Discriminator()
-    disc_v2 = Discriminator()
-    gen_v1.load_state_dict(gen_v1_dict)
-    gen_v2.load_state_dict(gen_v2_dict)
-    disc_v1.load_state_dict(disc_v1_dict)
-    disc_v2.load_state_dict(disc_v2_dict)
-    adversarial_loss = torch.nn.BCELoss()
-    cuda = True if torch.cuda.is_available() else False
-    if cuda:
-        gen_v1.cuda()
-        gen_v2.cuda()
-        disc_v1.cuda()
-        disc_v2.cuda()
-        adversarial_loss.cuda()
-    Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
-    valid = Variable(Tensor(batch_size, 1).fill_(1.0), requires_grad=False)
+    # gen_v1 = Generator()
+    # gen_v2 = Generator()
+    # disc_v1 = Discriminator()
+    # disc_v2 = Discriminator()
+    # gen_v1.load_state_dict(gen_v1_dict)
+    # gen_v2.load_state_dict(gen_v2_dict)
+    # disc_v1.load_state_dict(disc_v1_dict)
+    # disc_v2.load_state_dict(disc_v2_dict)
+    # adversarial_loss = torch.nn.BCELoss()
+    # cuda = True if torch.cuda.is_available() else False
+    # if cuda:
+    #     gen_v1.cuda()
+    #     gen_v2.cuda()
+    #     disc_v1.cuda()
+    #     disc_v2.cuda()
+    #     adversarial_loss.cuda()
+    # Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
+    # valid = Variable(Tensor(batch_size, 1).fill_(1.0), requires_grad=False)
 
     g1_losses, g2_losses = [], []
+    
+    xccmt1, xccmt2 = ModelTraining(), ModelTraining()
+    xccmt1.generator..load_state_dict(gen_v1_dict)
+    xccmt2.generator..load_state_dict(gen_v2_dict)
+    xccmt1.discriminator.load_state_dict(disc_v1_dict)
+    xccmt2.discriminator.load_state_dict(disc_v2_dict)
+
+    # TODO: add with torch.no_grad():
     for _ in range(n_batches):
         z = Variable(Tensor(rng.normal(0, 1, (batch_size, opt.latent_dim))))
-        gen_imgs_v1 = gen_v1(z)
-        gen_imgs_v2 = gen_v2(z)
-        g1_losses.append(adversarial_loss(disc_v2(gen_imgs_v1), valid).item())
-        g2_losses.append(adversarial_loss(disc_v1(gen_imgs_v2), valid).item())
+        gen_imgs_v1 = xccmt1.generator(z)
+        gen_imgs_v2 = xccmt2.generator(z)
+        g1_losses.append(xccmt2.adversarial_loss(xccmt2.discriminator(gen_imgs_v1), valid).item())
+        g2_losses.append(xccmt1.adversarial_loss(xccmt1.discriminator(gen_imgs_v2), valid).item())
 
     logger.info(f"G1 vs D2 mean = {np.mean(g1_losses)}\n\tG1 vs D2 losses: {g1_losses}.")
     logger.info(f"G2 vs D1 mean = {np.mean(g2_losses)}\n\tG2 vs D1 losses: {g2_losses}.")
+
+    xccmt1.n_epochs, xccmt2.n_epochs = n_epochs, n_epochs
+    
+    xccmt1.trainer()
+    xccmt1.save_stats()
+    xccmt1.final_result_show_off()
+    
+    xccmt2.trainer()
+    xccmt2.save_stats()
+    xccmt2.final_result_show_off()
 
 
 class Generator(nn.Module):
@@ -306,6 +324,7 @@ class ModelTraining:
 
         # Initialize other training properties
         self.epoch = 0
+        self.n_epochs = opt.n_epochs
         self.batches_done = 0
         self.good_mut = 0
         self.mut_counter = 0
@@ -393,7 +412,7 @@ class ModelTraining:
 
         # Start training
         specific_epoch_state = None
-        while self.epoch < opt.n_epochs:
+        while self.epoch < self.n_epochs:
             self.epoch += 1
             for i, (imgs, _) in enumerate(dataloader):
                 self.train_epoch(imgs)
@@ -478,8 +497,8 @@ class ModelTraining:
                    normalize=True)
 
     def print_stats(self, dataloader_length):
-        logger.info(f"[Epoch {self.epoch:d}/{opt.n_epochs}] "
-                    f"[Batch {self.batches_done:d}/{opt.n_epochs * dataloader_length:d}] "
+        logger.info(f"[Epoch {self.epoch:d}/{self.n_epochs}] "
+                    f"[Batch {self.batches_done:d}/{self.n_epochs * dataloader_length:d}] "
                     f"[D loss: {self.d_loss.item():.3f}] "
                     f"[G loss: {self.g_loss.item():.3f}] "
                     f"[Mutations success rate {self.good_mut:d}/{self.mut_counter:d}]")
@@ -520,7 +539,7 @@ class ModelTraining:
         stats_df.to_csv(f"images/{self.unique_model_name}/logs/{filename}.csv", index=False)
 
     def save_model_training_info(self):
-        mes = (f"Start time:{datetime.now()}; model seed:{MODEL_SEED}; epochs:{opt.n_epochs}; "
+        mes = (f"Start time:{datetime.now()}; model seed:{MODEL_SEED}; epochs:{self.n_epochs}; "
                f"batch size:{opt.batch_size}; comparison sequence:{self._enable_comparison_sequence};\n"
                f"mutations:{opt.enable_mut}; mutations interval:{opt.mut_interval}; "
                f"number of mutations:{opt.n_mut}; probabilities:{self.mut_probabilities_list};\n")
@@ -540,7 +559,7 @@ class ModelTraining:
 
         self._enable_comparison_sequence = True
         self._return_specific_epoch_state = True
-        key_epochs = list(range(opt.mut_interval, opt.n_epochs + 1, opt.mut_interval))
+        key_epochs = list(range(opt.mut_interval, self.n_epochs + 1, opt.mut_interval))
 
         for epoch_num in key_epochs:
             logger.info(f"{10 * '-'} Starting a new sequence {10 * '-'}")
