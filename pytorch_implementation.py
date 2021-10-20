@@ -24,7 +24,7 @@ from bit_operations import BitOps
 IMG_SIZE = 28
 IMG_CHANNELS = 1
 IMG_SHAPE = (IMG_CHANNELS, IMG_SIZE, IMG_SIZE)
-MODEL_SEED = 12345
+MODEL_SEED = 23456
 
 # Setup logging so that messages are printed to both stdout and logfile
 logger = logging.getLogger()
@@ -71,58 +71,50 @@ def initialize_weights_for_sigmoid(model):
 
 def x_cross_comparison(disc_v1_dict, gen_v1_dict,
                        disc_v2_dict, gen_v2_dict,
+                       optimD_v1_dict, optimG_v1_dict,
+                       optimD_v2_dict, optimG_v2_dict,
                        comparison_seed=MODEL_SEED,
                        batch_size=opt.batch_size,
-                       n_batches=5, n_epochs=20):
-    # rng = np.random.default_rng(comparison_seed)
+                       n_batches=5, start_epoch=0,
+                       n_epochs=20):
+    # Discriminator and generator weights are SHUFFLED
+    xccmt1 = ModelTraining(mt_seed=comparison_seed, mt_id=1)
+    xccmt1_state = [
+        gen_v1_dict,    disc_v2_dict,
+        optimG_v1_dict, optimD_v2_dict,
+    ]
+    xccmt1.load_model_state(xccmt1_state)
 
-    # gen_v1 = Generator()
-    # gen_v2 = Generator()
-    # disc_v1 = Discriminator()
-    # disc_v2 = Discriminator()
-    # gen_v1.load_state_dict(gen_v1_dict)
-    # gen_v2.load_state_dict(gen_v2_dict)
-    # disc_v1.load_state_dict(disc_v1_dict)
-    # disc_v2.load_state_dict(disc_v2_dict)
-    # adversarial_loss = torch.nn.BCELoss()
-    # cuda = True if torch.cuda.is_available() else False
-    # if cuda:
-    #     gen_v1.cuda()
-    #     gen_v2.cuda()
-    #     disc_v1.cuda()
-    #     disc_v2.cuda()
-    #     adversarial_loss.cuda()
-    # Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
-    # valid = Variable(Tensor(batch_size, 1).fill_(1.0), requires_grad=False)
+    xccmt2 = ModelTraining(mt_seed=comparison_seed, mt_id=2)
+    xccmt2_state = [
+        gen_v2_dict, disc_v1_dict,
+        optimG_v2_dict, optimD_v1_dict,
+    ]
+    xccmt2.load_model_state(xccmt2_state)
 
     g1_losses, g2_losses = [], []
-    
-    xccmt1, xccmt2 = ModelTraining(), ModelTraining()
-    xccmt1.generator..load_state_dict(gen_v1_dict)
-    xccmt2.generator..load_state_dict(gen_v2_dict)
-    xccmt1.discriminator.load_state_dict(disc_v1_dict)
-    xccmt2.discriminator.load_state_dict(disc_v2_dict)
-
-    # TODO: add with torch.no_grad():
-    for _ in range(n_batches):
-        z = Variable(Tensor(rng.normal(0, 1, (batch_size, opt.latent_dim))))
-        gen_imgs_v1 = xccmt1.generator(z)
-        gen_imgs_v2 = xccmt2.generator(z)
-        g1_losses.append(xccmt2.adversarial_loss(xccmt2.discriminator(gen_imgs_v1), valid).item())
-        g2_losses.append(xccmt1.adversarial_loss(xccmt1.discriminator(gen_imgs_v2), valid).item())
+    valid = Variable(xccmt1.Tensor(batch_size, 1).fill_(1.0), requires_grad=False)
+    with torch.no_grad():
+        for _ in range(n_batches):
+            z = Variable(xccmt1.Tensor(xccmt1.rng.normal(0, 1, (batch_size, opt.latent_dim))))
+            gen_imgs_v1 = xccmt1.generator(z)
+            gen_imgs_v2 = xccmt2.generator(z)
+            g1_losses.append(xccmt1.adversarial_loss(xccmt1.discriminator(gen_imgs_v1), valid).item())
+            g2_losses.append(xccmt2.adversarial_loss(xccmt2.discriminator(gen_imgs_v2), valid).item())
 
     logger.info(f"G1 vs D2 mean = {np.mean(g1_losses)}\n\tG1 vs D2 losses: {g1_losses}.")
     logger.info(f"G2 vs D1 mean = {np.mean(g2_losses)}\n\tG2 vs D1 losses: {g2_losses}.")
 
-    xccmt1.n_epochs, xccmt2.n_epochs = n_epochs, n_epochs
-    
-    xccmt1.trainer()
-    xccmt1.save_stats()
-    xccmt1.final_result_show_off()
-    
-    xccmt2.trainer()
-    xccmt2.save_stats()
-    xccmt2.final_result_show_off()
+    for mt in [xccmt1, xccmt2]:
+        mt.epoch = start_epoch
+        mt.n_epochs = start_epoch + n_epochs
+        mt.reset_seeds()
+        mt.trainer()
+        mt.save_stats()
+        mt.final_result_show_off()
+        mt.save_model_state(mt.have_state_dicts,
+                            [f"gen_finish{mt.epoch}", f"disc_finish{mt.epoch}",
+                             f"optimG_finish{mt.epoch}", f"optimD_finish{mt.epoch}"])
 
 
 class Generator(nn.Module):
@@ -281,9 +273,9 @@ class ModelTraining:
     SAVE_STATE_DICT_AFTER_EACH_EPOCH = False
     mut_probabilities_list = [0.0005, 0.0002, 0.0001, 0.00005, 0.00002, 0.00001]
 
-    def __init__(self):
+    def __init__(self, mt_seed=MODEL_SEED, mt_id="_"):
         # Folders and files naming handling
-        self.unique_model_name = f"PyTorch_t{datetime.now().strftime('%m%d_%H%M%S')}"
+        self.unique_model_name = f"PyTorch_t{datetime.now().strftime('%m%d_%H%M%S')}_id{mt_id}"
         os.makedirs(f"images/{self.unique_model_name}/", exist_ok=True)
         os.makedirs(f"images/{self.unique_model_name}/media/", exist_ok=True)
         os.makedirs(f"images/{self.unique_model_name}/samples/", exist_ok=True)
@@ -293,11 +285,11 @@ class ModelTraining:
         # Start logging
         output_file_handler = logging.FileHandler(f"images/{self.unique_model_name}/logs/output.log")
         logger.addHandler(output_file_handler)
-        self.save_model_training_info()
 
         # Consistent seeds for reproducibility
-        self.rng = np.random.default_rng(MODEL_SEED)
-        torch.manual_seed(MODEL_SEED)
+        self.mt_seed = mt_seed
+        self.rng = np.random.default_rng(self.mt_seed)
+        torch.manual_seed(self.mt_seed)
 
         # Loss function
         self.adversarial_loss = torch.nn.BCELoss()
@@ -319,10 +311,10 @@ class ModelTraining:
             self.generator.cuda()
             self.discriminator.cuda()
             self.adversarial_loss.cuda()
-
         self.Tensor = torch.cuda.FloatTensor if self.cuda else torch.FloatTensor
 
         # Initialize other training properties
+        self.mt_id = mt_id
         self.epoch = 0
         self.n_epochs = opt.n_epochs
         self.batches_done = 0
@@ -343,7 +335,7 @@ class ModelTraining:
         self._return_specific_epoch_state = False
         self._specific_epoch_state = 0
         self._model_suffix = "n"
-        self._have_state_dicts = [self.generator, self.discriminator, self.optimizer_G, self.optimizer_D]
+        self.have_state_dicts = [self.generator, self.discriminator, self.optimizer_G, self.optimizer_D]
         self._enable_comparison_sequence = False
 
         # Generate seed for consistent images
@@ -352,6 +344,9 @@ class ModelTraining:
             Variable(self.Tensor(self.rng.normal(0, 1, (self.images_per_sample, opt.latent_dim))))
             for _ in range(self.number_of_final_show_off_samples)
         ]
+
+        # Create a description of the model in the log file
+        self.save_model_training_info()
 
     def train_epoch(self, imgs):
         # Adversarial ground truths
@@ -425,18 +420,17 @@ class ModelTraining:
 
             if self.epoch % opt.mut_interval == 0 and self.epoch != 0:
                 if self._enable_comparison_sequence:
-                    self.rng = np.random.default_rng(self.epoch * MODEL_SEED)
-                    torch.manual_seed(self.epoch * MODEL_SEED)
+                    self.reset_seeds(self.epoch * self.mt_seed)
                 if opt.enable_mut:
                     mutated_gen_state_dict = self.mutation_handler()
                     if mutated_gen_state_dict is not None:
                         self.apply_mutation(mutated_gen_state_dict)
 
             if self._return_specific_epoch_state and self.epoch == self._specific_epoch_state:
-                specific_epoch_state = [deepcopy(m.state_dict()) for m in self._have_state_dicts]
+                specific_epoch_state = [deepcopy(m.state_dict()) for m in self.have_state_dicts]
 
             if self.SAVE_STATE_DICT_AFTER_EACH_EPOCH:
-                self.save_model_state(self._have_state_dicts,
+                self.save_model_state(self.have_state_dicts,
                                       [f"gen_ep{self.epoch}", f"disc_ep{self.epoch}",
                                        f"optimG_ep{self.epoch}", f"optimD_ep{self.epoch}"])
         return specific_epoch_state
@@ -484,6 +478,12 @@ class ModelTraining:
         self.save_image("b")
         self.generator.load_state_dict(new_state_dict)
         self.save_image("a")
+
+    def reset_seeds(self, seed=None):
+        if seed is None:
+            seed = self.mt_seed
+        self.rng = np.random.default_rng(seed)
+        torch.manual_seed(seed)
 
     def save_image(self, prefix="", z_seed=None):
         if z_seed is None:
@@ -539,7 +539,8 @@ class ModelTraining:
         stats_df.to_csv(f"images/{self.unique_model_name}/logs/{filename}.csv", index=False)
 
     def save_model_training_info(self):
-        mes = (f"Start time:{datetime.now()}; model seed:{MODEL_SEED}; epochs:{self.n_epochs}; "
+        mes = (f"Model iD:{self.mt_id}; start time:{datetime.now()}; "
+               f"model seed:{self.mt_seed}; epochs:{self.n_epochs}; "
                f"batch size:{opt.batch_size}; comparison sequence:{self._enable_comparison_sequence};\n"
                f"mutations:{opt.enable_mut}; mutations interval:{opt.mut_interval}; "
                f"number of mutations:{opt.n_mut}; probabilities:{self.mut_probabilities_list};\n")
@@ -548,6 +549,10 @@ class ModelTraining:
     def save_model_state(self, models, filenames):
         for model, filename in zip(models, filenames):
             torch.save(model.state_dict(), f"images/{self.unique_model_name}/models/{filename}.pth")
+
+    def load_model_state(self, states):
+        for m, state in zip(self.have_state_dicts, states):
+            m.load_state_dict(state)
 
     def final_result_show_off(self, prefix=""):
         for i, fz_seed in enumerate(self.final_show_off_z_seeds):
@@ -560,6 +565,7 @@ class ModelTraining:
         self._enable_comparison_sequence = True
         self._return_specific_epoch_state = True
         key_epochs = list(range(opt.mut_interval, self.n_epochs + 1, opt.mut_interval))
+        logger.info("Comparison sequence is enabled now.")
 
         for epoch_num in key_epochs:
             logger.info(f"{10 * '-'} Starting a new sequence {10 * '-'}")
@@ -571,7 +577,7 @@ class ModelTraining:
             self.plot_stats(filename=f"plot_{epoch_num}")
             self.save_stats(filename=f"stats_{epoch_num}")
             self.final_result_show_off()
-            self.save_model_state(self._have_state_dicts,
+            self.save_model_state(self.have_state_dicts,
                                   [f"gen_finish{epoch_num}", f"disc_finish{epoch_num}",
                                    f"optimG_finish{epoch_num}", f"optimD_finish{epoch_num}"])
 
@@ -582,31 +588,36 @@ class ModelTraining:
                     states_from_i[0] = mutated_gen_state_dict
 
             # Prepare for the next training
-            for m, state in zip(self._have_state_dicts, states_from_i):
-                m.load_state_dict(state)
-            self.rng = np.random.default_rng(epoch_num * MODEL_SEED)
-            torch.manual_seed(epoch_num * MODEL_SEED)
+            self.load_model_state(states_from_i)
+            self.reset_seeds(epoch_num * self.mt_seed)
             self.epoch = epoch_num
             for stats_key in ["time", "batch", "g_loss", "d_loss"]:
                 self.stats[stats_key] = []
 
 
 if __name__ == "__main__":
-    # make_comparison = True
-    # mt = ModelTraining()
-    # if make_comparison:
-    #     mt.comparison_sequence()
-    # else:
-    #     mt.trainer()
-    #     mt.plot_stats()
-    #     mt.make_animation()
-    #     mt.save_stats()
-    #     mt.final_result_show_off()
-    dir_path = "images\\PyTorch_t1010_100858_mFalse_ep80_bs64_nm30_mp0.02_mi4\\models\\"
-    x_cross_comparison(
-        disc_v1_dict=torch.load(f"{dir_path}disc_finish4.pth"),
-        gen_v1_dict=torch.load(f"{dir_path}gen_finish4.pth"),
-        disc_v2_dict=torch.load(f"{dir_path}disc_finish80.pth"),
-        gen_v2_dict=torch.load(f"{dir_path}gen_finish80.pth"),
-        n_batches=1000,
-    )
+    make_comparison = True
+    mt = ModelTraining()
+    if make_comparison:
+        mt.comparison_sequence()
+    else:
+        mt.trainer()
+        mt.plot_stats()
+        mt.make_animation()
+        mt.save_stats()
+        mt.final_result_show_off()
+    # dir_path = "images\\PyTorch_t1010_100858_important_version\\models\\"
+    # x_cross_comparison(
+    #     disc_v1_dict=torch.load(f"{dir_path}disc_finish4.pth"),
+    #     gen_v1_dict=torch.load(f"{dir_path}gen_finish4.pth"),
+    #     disc_v2_dict=torch.load(f"{dir_path}disc_finish8.pth"),
+    #     gen_v2_dict=torch.load(f"{dir_path}gen_finish8.pth"),
+    #     optimD_v1_dict=torch.load(f"{dir_path}optimD_finish4.pth"),
+    #     optimG_v1_dict=torch.load(f"{dir_path}optimG_finish4.pth"),
+    #     optimD_v2_dict=torch.load(f"{dir_path}optimD_finish8.pth"),
+    #     optimG_v2_dict=torch.load(f"{dir_path}optimG_finish8.pth"),
+    #     n_batches=1000,
+    #     n_epochs=40,
+    #     start_epoch=80,
+    #     comparison_seed=23456
+    # )
