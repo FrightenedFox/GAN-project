@@ -6,6 +6,8 @@ The evolutionary impact on the Generative Adversarial Network was studied in
 this repo. The traditional gradient descent was combined with mutations and
 selection to improve the process of local minima escape.
 
+This is the repository for the following article: [Exploration of the evolution-based footprint on the Generative Adversarial Networks](https://ieeexplore.ieee.org/document/9659993)
+
 ## Acknowledgments
 
 This code borrows heavily from the following sources:
